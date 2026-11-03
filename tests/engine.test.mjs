@@ -96,3 +96,22 @@ test("armour: flatter slopes need lighter rock; bigger waves need heavier units"
   const a3 = accropode({ ...base, Hs: 3, cot: 4 / 3, rhoC: 2400, type: "accropode2" });
   assert.ok(a3.V > a2.V);
 });
+
+test("benches: the face follows each bench and berm, crest down", async () => {
+  const { faceOf } = await import("../talus_app/static/engine/project.js");
+  const f = faceOf(complete({ type: "cut", geom: { berms: { on: true, rows: [{ h: 6, cot: 2.5, berm: 4 }, { h: 5.71, cot: 2 }] } } }));
+  assert.deepEqual(f.pts.map((p) => p.map((v) => +v.toFixed(6))), [[0, 0], [11.42, 5.71], [15.42, 5.71], [30.42, 11.71]]);
+  assert.ok(Math.abs(f.H - 11.71) < 1e-9);
+});
+
+test("benches: a single bench gives the same answer as the plain slope", () => {
+  const plain = analyse(complete({ type: "cut", geom: { H: 6, cot: 2 }, seismic: { on: false } }));
+  const one = analyse(complete({ type: "cut", geom: { H: 99, cot: 9, berms: { on: true, rows: [{ h: 6, cot: 2 }] } }, seismic: { on: false } }));
+  assert.ok(Math.abs(plain.cases[0].F - one.cases[0].F) < 1e-9);
+});
+
+test("benches: a berm makes the same slopes safer", () => {
+  const F = (berm) => analyse(complete({ type: "cut", seismic: { on: false },
+    geom: { berms: { on: true, rows: [{ h: 4, cot: 1.5, berm }, { h: 4, cot: 1.5 }] } } })).cases[0].F;
+  assert.ok(F(5) > F(0.01));
+});
