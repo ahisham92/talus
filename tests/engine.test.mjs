@@ -260,3 +260,25 @@ test("DXF: layers become the ground, soil tops, water and base of a section", as
   const b = buildCases({ type: "section", ground: r.ground, base: r.base, layers: r.layers, water: r.water, seismic: { on: false } });
   assert.ok(analyseCase(b.cases[0], { method: "mp", slices: 30 }).F > 0.5);
 });
+
+test("staged drawdown: free-draining soils give the conventional F; clays give all three stages", async () => {
+  const { buildCases } = await import("../talus_app/static/engine/project.js");
+  const { analyseCase } = await import("../talus_app/static/engine/analyse.js");
+  const { stagedF } = await import("../talus_app/static/engine/drawdown.js");
+  const { prepare } = await import("../talus_app/static/engine/lem.js");
+  const pr = (fill, extra = {}) => ({ type: "embankment", fill, soil: { preset: "denseSand" }, water: { on: true, level: 4.5, low: 0, staged: true, ...extra }, seismic: { on: false } });
+  // a free-draining fill: every slice keeps its drained strength
+  const c = buildCases(pr({ preset: "fill", drains: "yes" })).cases.find((k) => k.key === "drawdown");
+  const conv = analyseCase({ ...c, staged: undefined }, { method: "mp", slices: 40 });
+  const P1 = prepare(c.staged.before), P2 = prepare(c.model);
+  const r = stagedF(P1, P2, conv._r.cut.slip, conv._r.circle, "mp", 40);
+  assert.ok(Math.abs(r.F / conv.F - 1) < 1e-9, `${r.F} vs ${conv.F}`);
+  assert.equal(r.rows.filter(Boolean).length, 0);
+  // a clay fill: undrained in stage 2, F3 <= F2, and the case reports its stages
+  const cl = analyseCase(buildCases(pr({ preset: "claySilt", cR: 15, phiR: 16 })).cases.find((k) => k.key === "drawdown"), { method: "mp", slices: 40 });
+  assert.ok(cl.staged && cl.staged.slices > 0, "staged slices");
+  assert.ok(cl.staged.F3 <= cl.staged.F2 + 1e-9 && Math.abs(cl.F - cl.staged.F3) < 0.02, JSON.stringify(cl.staged) + " F " + cl.F);
+  // a stronger R envelope cannot lower F
+  const strong = analyseCase(buildCases(pr({ preset: "claySilt", cR: 40, phiR: 22 })).cases.find((k) => k.key === "drawdown"), { method: "mp", slices: 40 });
+  assert.ok(strong.F >= cl.F - 1e-3, `${strong.F} vs ${cl.F}`);
+});

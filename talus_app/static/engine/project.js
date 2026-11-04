@@ -291,7 +291,8 @@ function embankmentCases(p) {
   }
   const landPiles = pileRow(p, x4 - num(p.piles?.x, 0), ground), waterPiles = pileRow(p, x1 + num(p.piles?.x, 0), ground);
   const base = { ground, bottom: -D, gw: 9.81, factors: factorsOf(p), crack: { depth: num(p.advanced?.crack, 0), water: 0 } };
-  const wet = { ...base, flow };       // the steady seepage and drawdown cases use the flow net
+  const wet = { ...base, flow };
+  const staged = p.water?.staged === true;       // the steady seepage and drawdown cases use the flow net
   const T = targetsOf(p);
   const cases = [];
   if (found.clay || fill.clay) cases.push({ key: "eoc", name: "End of construction", target: T.short,
@@ -302,7 +303,10 @@ function embankmentCases(p) {
     note: hw > 0 ? (flow ? `Water held on the left at full level; pore pressures from the flow net (seepage ${flowText(flow)}); land-side slope.` : "Water held on the left at full level; seepage line straight to the right toe; land-side slope.") : "Effective strength c', φ'." });
   if (hw > 0) cases.push({ key: "drawdown", name: "Rapid drawdown", target: T.transient,
     model: { ...wet, flowCap: !!flow, face: waterFace, reinforcement: [...reinforcement, ...waterPiles], layers: layers(false), piezo: drawn, strips: strip() },
-    note: `Water outside drops from ${hw.toFixed(1)} m to ${lowW.toFixed(1)} m faster than the fill drains (pore pressures stay at the steady-state ${flow ? "flow net" : "line"}); water-side slope.` });
+    ...(staged ? { staged: { before: { ...wet, face: waterFace, reinforcement: [...reinforcement, ...waterPiles], layers: layers(false), piezo: seep, strips: strip() } } } : {}),
+    note: staged
+      ? `Water outside drops from ${hw.toFixed(1)} m to ${lowW.toFixed(1)} m. Three-stage method (Duncan, Wright and Wong 1990; USACE EM 1110-2-1902 App. G): consolidation stresses from full-water steady seepage, undrained strengths in the soils that do not drain freely (k below 1e-5 m/s) from the R envelope, drained where that is lower.`
+      : `Water outside drops from ${hw.toFixed(1)} m to ${lowW.toFixed(1)} m faster than the fill drains (pore pressures stay at the steady-state ${flow ? "flow net" : "line"}); water-side slope.` });
   const eq = seismicCoefficients(p, H, Math.atan(1 / cot) * 180 / Math.PI);
   if (eq) cases.push({ key: "seismic", name: "Seismic (pseudo-static)", target: T.seismic, seismic: eq,
     model: { ...wet, face: land, reinforcement: [...reinforcement, ...landPiles], layers: layers(true, fill.clay), piezo: seep, strips: strip(0.3), seismic: { kh: eq.kh, kv: eq.kv } },
