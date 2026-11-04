@@ -11,6 +11,7 @@ import { arcY, mirror } from "./geometry.js";
 import { rockArmour, accropode, toe, vanDerMeerNs, waveParams } from "./armour.js";
 import { newmark } from "./analyse.js";
 import { hoekBrown, hbTangent, hbEquivalent } from "./materials.js";
+import { probabilistic, normCdf } from "./prob.js";
 
 const D = Math.PI / 180;
 
@@ -132,6 +133,17 @@ export const CHECKS = [
       for (let i = 0; i <= N; i++) { const x = t0 + (e.s3max - t0) * i / N, y = x + sigci * Math.pow(mb * x / sigci + s, a); sx += x; sy += y; sxx += x * x; sxy += x * y; }
       const n = N + 1, k = (n * sxy - sx * sy) / (n * sxx - sx * sx);
       return { expected: Math.asin((k - 1) / (k + 1)) / D, rows: [["φ' (Hoek 2002)", e.phi]], tol: 1e-3 };
+    },
+  },
+  {
+    id: "prob-lognormal", group: "Probabilistic",
+    title: "Monte Carlo on a dry sand slope: F is lognormal with the COV of tan φ",
+    source: "c = 0, no water, 6 m at 1:2: F ∝ tan φ, so with tan φ lognormal (COV 15%) β = ln(F/√(1+V²)) / √ln(1+V²) and Pf = Φ(−β); 4000 Latin hypercube samples",
+    run() {
+      const V = 0.15;
+      const r = probabilistic({ type: "cut", soil: { preset: "looseSand" }, geom: { H: 6, cot: 2 }, water: { on: false }, load: { q: 0 }, seismic: { on: false } }, { n: 4000, cov: { tanphi: V, gamma: 0 } });
+      const beta = Math.log(r.deterministic / Math.sqrt(1 + V * V)) / Math.sqrt(Math.log(1 + V * V));
+      return { expected: normCdf(-beta), rows: [["Pf, Monte Carlo", r.pf], ["Pf from the sampled β", r.pfLN]], tol: 0.03 };
     },
   },
   {

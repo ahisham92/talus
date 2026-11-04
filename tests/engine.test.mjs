@@ -187,3 +187,17 @@ test("reinforcement: a basal geogrid and a pile row make slopes safer", () => {
   const c = { type: "cut", seismic: { on: false } };
   assert.ok(F({ ...c, piles: { on: true, x: 3, length: 12, Vp: 300, spacing: 2 } }) > F(c) + 0.1);
 });
+
+test("probabilistic: a dry frictional slope gives the closed-form lognormal answer", async () => {
+  const { probabilistic, normCdf } = await import("../talus_app/static/engine/prob.js");
+  // c = 0 and no water: F is proportional to tan φ, so F is lognormal with the COV of tan φ
+  const p = { type: "cut", soil: { preset: "looseSand" }, geom: { H: 6, cot: 2 }, water: { on: false }, load: { q: 0 }, seismic: { on: false } };
+  const V = 0.15;
+  const r = probabilistic(p, { n: 4000, cov: { tanphi: V, gamma: 0 } });
+  const s = Math.sqrt(Math.log(1 + V * V));
+  const beta = Math.log(r.deterministic / Math.sqrt(1 + V * V)) / s;
+  assert.ok(Math.abs(r.mean / r.deterministic - 1) < 0.005, `mean ${r.mean} vs ${r.deterministic}`);
+  assert.ok(Math.abs(r.betaLN - beta) < 0.02, `β ${r.betaLN} vs ${beta}`);
+  assert.ok(Math.abs(r.pf - normCdf(-beta)) < 3 * r.pfSE + 0.002, `pf ${r.pf} vs ${normCdf(-beta)}`);
+  assert.equal(r.sens[0].prop, "tanphi");
+});
