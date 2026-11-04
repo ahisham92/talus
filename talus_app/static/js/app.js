@@ -7,6 +7,7 @@ import { rockArmour, accropode, damageLevels, COEFFS } from "../engine/armour.js
 import { sectionSVG, esc } from "./section.js";
 import { fosColour } from "./shapes.js";
 import { docx } from "./docx.js";
+import { COV, COV_LABEL } from "../engine/prob.js";
 
 const T = window.__TALUS || { api: "api", base: "./", static: "static/", openId: null };
 const $ = (s, el = document) => el.querySelector(s);
@@ -21,7 +22,7 @@ const state = {
   project: null, id: null, version: null,
   result: null, partial: [], seismic: null, selected: null,
   view: "3d", trials: false, motion: true, tab: "methods",
-  verify: null, optimise: null, offline: false, dirty: false,
+  verify: null, optimise: null, prob: null, offline: false, dirty: false,
 };
 
 // ------------------------------------------------------------------ helpers
@@ -486,6 +487,7 @@ function refreshSums() {
 
 function analyse() {
   state.partial = [];
+  if (state.prob && !state.prob.running) state.prob = null;
   state.seismic = null;
   state.analyseId = run("analyse");
   setBusy(true, "Calculating…");
@@ -522,6 +524,15 @@ function onWorker(ev) {
     jobRunning = false; setBusy(false);
     state.optimise = { ...(state.optimise || {}), done: m.result, running: false };
     state.tab = "optimise"; renderTabs(); renderPanel();
+  } else if (m.kind === "probStep") {
+    state.prob = { ...(state.prob || {}), running: true, done: m.done, n: m.n };
+    setBusy(true, `Sample ${m.done} of ${m.n}…`);
+    if (state.tab === "prob") renderPanel();
+  } else if (m.kind === "probDone") {
+    jobRunning = false; setBusy(false);
+    state.prob = { result: m.result, running: false };
+    if (m.result.error) toast(m.result.error, true);
+    if (state.tab === "prob") renderPanel();
   } else if (m.kind === "check") {
     state.verify.rows[m.i] = m;
     renderPanel();
@@ -639,7 +650,7 @@ function renderCases(partial) {
 
 const TABS = [
   ["methods", "Methods"], ["slices", "Slices"], ["armour", "Armour"], ["seismic", "Earthquake"],
-  ["optimise", "Optimise"], ["verify", "Verification"], ["about", "How it works"],
+  ["optimise", "Optimise"], ["prob", "Probability"], ["verify", "Verification"], ["about", "How it works"],
 ];
 function renderTabs() {
   const tabs = TABS.filter(([k]) => (k !== "armour" || state.project.type === "revetment") && (k !== "optimise" || state.project.type !== "section"));
@@ -656,6 +667,7 @@ function renderPanel() {
   else if (t === "armour") P.innerHTML = armourPanel();
   else if (t === "seismic") P.innerHTML = seismicPanel();
   else if (t === "optimise") P.innerHTML = optimisePanel();
+  else if (t === "prob") P.innerHTML = probPanel();
   else if (t === "verify") P.innerHTML = verifyPanel();
   else if (t === "about") P.innerHTML = aboutPanel();
 }
@@ -737,6 +749,81 @@ function slopeComparison() {
   });
 }
 
+// ------------------------------------------------------------------ probability
+
+/** USACE ETL 1110-2-547 (1997): expected performance by reliability index. */
+const PERFORMANCE = [[5, "High", "good"], [4, "Good", "good"], [3, "Above average", "good"], [2.5, "Below average", "warn"], [2, "Poor", "bad"], [1.5, "Unsatisfactory", "bad"], [-Infinity, "Hazardous", "bad"]];
+const performanceOf = (b) => PERFORMANCE.find(([t]) => b >= t);
+
+/** Which variables the project has, for the COV inputs. */
+function probProps(p) {
+  const out = new Set(["gamma"]);
+  const soils = [];
+  for (const G of SPEC[p.type]) for (const it of G.items) if (it.kind === "soil" && (!it.show || it.show(p))) soils.push(soilFrom(get(p, it.k)));
+  if (p.type === "section") for (const L of p.layers || []) soils.push(soilFrom(L.soil));
+  for (const s of soils) {
+    if (s.hb) { out.add("GSI"); out.add("sci"); continue; }
+    out.add("tanphi"); if (s.c > 0) out.add("c"); if (s.clay && s.su > 0) out.add("su");
+  }
+  return ["tanphi", "c", "su", "GSI", "sci", "gamma"].filter((k) => out.has(k));
+}
+
+function histSVG(r) {
+  const W = 560, H = 190, pad = { l: 34, r: 10, t: 12, b: 28 };
+  const x0 = Math.min(r.min, 0.95), x1 = Math.max(r.max, r.deterministic * 1.02);
+  const X = (x) => pad.l + (x - x0) / (x1 - x0) * (W - pad.l - pad.r);
+  const top = Math.max(...r.hist.map((h) => h.n));
+  const Y = (n) => H - pad.b - n / top * (H - pad.t - pad.b);
+  const bars = r.hist.map((h) => `<rect x="${X(h.x0) + 0.5}" y="${Y(h.n)}" width="${Math.max(0.5, X(h.x1) - X(h.x0) - 1)}" height="${H - pad.b - Y(h.n)}" fill="${h.x1 <= 1 ? "var(--critical)" : "var(--series-1, #2a78d6)"}" opacity="${h.x1 <= 1 ? 0.85 : 0.75}"/>`).join("");
+  const step = (x1 - x0) > 1.5 ? 0.5 : (x1 - x0) > 0.6 ? 0.2 : 0.1;
+  let ticks = "";
+  for (let x = Math.ceil(x0 / step) * step; x <= x1 + 1e-9; x += step) ticks += `<text x="${X(x)}" y="${H - 10}" font-size="10" text-anchor="middle" fill="var(--muted)">${+x.toFixed(2)}</text>`;
+  return `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="Distribution of the factor of safety">
+    <line x1="${pad.l}" y1="${H - pad.b}" x2="${W - pad.r}" y2="${H - pad.b}" stroke="var(--grid)"/>${bars}${ticks}
+    <line x1="${X(1)}" y1="${pad.t - 4}" x2="${X(1)}" y2="${H - pad.b}" stroke="var(--critical)" stroke-width="1.5" stroke-dasharray="4 3"/><text x="${X(1) + 4}" y="${pad.t + 6}" font-size="10" fill="var(--critical)">F = 1</text>
+    <line x1="${X(r.deterministic)}" y1="${pad.t - 4}" x2="${X(r.deterministic)}" y2="${H - pad.b}" stroke="var(--ink)" stroke-width="1.2"/><text x="${X(r.deterministic) + 5}" y="${pad.t + 6}" font-size="10" fill="var(--ink-2)">design ${f2(r.deterministic)}</text>
+    <text x="${W - pad.r}" y="${pad.t + 6}" font-size="10" text-anchor="end" fill="var(--muted)">factor of safety →</text></svg>`;
+}
+
+function tornadoSVG(r) {
+  const S = r.sens.filter((s) => Number.isFinite(s.low) && Number.isFinite(s.high));
+  if (!S.length) return "";
+  const W = 560, row = 24, pad = { l: 170, r: 40, t: 8 }, H = pad.t + row * S.length + 22;
+  const lo = Math.min(...S.map((s) => s.low)), hi = Math.max(...S.map((s) => s.high));
+  const X = (x) => pad.l + (x - lo) / ((hi - lo) || 1) * (W - pad.l - pad.r);
+  const bars = S.map((s, i) => { const y = pad.t + i * row; return `<text x="${pad.l - 8}" y="${y + 15}" font-size="11" text-anchor="end" fill="var(--ink-2)">${esc(s.name)}</text>
+    <rect x="${X(s.low)}" y="${y + 4}" width="${Math.max(1, X(s.high) - X(s.low))}" height="${row - 8}" rx="3" fill="var(--series-1, #2a78d6)" opacity="0.8"/>
+    <text x="${X(s.high) + 4}" y="${y + 15}" font-size="10" fill="var(--muted)">${f2(s.low)}–${f2(s.high)}</text>`; }).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="Sensitivity of F to each variable">
+    <line x1="${X(r.atMeans)}" y1="${pad.t}" x2="${X(r.atMeans)}" y2="${H - 18}" stroke="var(--ink)" stroke-width="1"/>${bars}
+    <text x="${X(r.atMeans)}" y="${H - 4}" font-size="10" text-anchor="middle" fill="var(--muted)">F at the means ${f2(r.atMeans)}</text></svg>`;
+}
+
+function probPanel() {
+  const p = state.project, c = currentCase(), st = state.prob;
+  if (!c) return "";
+  const cov = { ...COV, ...(p.prob?.cov || {}) };
+  const props = probProps(p);
+  const fields = props.map((k) => `<div class="f"><span class="lab">COV of ${COV_LABEL[k]}</span><span class="num"><input type="number" inputmode="decimal" min="0" max="100" step="1" data-pk="cov.${k}" value="${+(cov[k] * 100).toFixed(1)}"><span class="unit">%</span></span></div>`).join("");
+  const n = p.prob?.n || 2000;
+  const r = st?.result && !st.result.error && st.result.case.key === c.key ? st.result : null;
+  let out = `<p class="explain">Soil and rock properties are never known exactly. Here each one is uncertain, lognormal around the value entered, and ${n.toLocaleString()} combinations are solved on the critical surface of <b>${esc(c.name)}</b>. The share that fail gives the probability of failure, and β says how many standard deviations the mean F sits above 1.</p>
+    <div class="probgrid mt-sm">${fields}<div class="f"><span class="lab">Samples</span><select data-pk="n">${[500, 1000, 2000, 5000, 10000].map((v) => `<option value="${v}" ${v === n ? "selected" : ""}>${v.toLocaleString()}</option>`).join("")}</select></div></div>
+    <div class="row mt-sm"><button class="btn btn-primary" data-prob ${st?.running ? "disabled" : ""}>${st?.running ? `Sampling… ${st.done || 0} of ${st.n || n}` : r ? "Run again" : "Run the Monte Carlo"}</button><span class="note">Latin hypercube, fixed seed: the same inputs always give the same answer. Typical COVs from Phoon and Kulhawy (1999) and Duncan (2000).</span></div>`;
+  if (r) {
+    const perf = performanceOf(r.betaLN);
+    out += `<div class="kpis mt">
+      <div class="kpi"><div class="k">Probability of failure</div><div class="v">${r.pf < 0.0005 ? `< ${(1 / r.n * 100).toFixed(2)}%` : (r.pf * 100).toFixed(r.pf < 0.01 ? 2 : 1) + "%"}</div><div class="s">${r.fails} of ${r.n.toLocaleString()} samples below F = 1 · lognormal fit ${(r.pfLN * 100).toFixed(r.pfLN < 0.01 ? 3 : 1)}%</div></div>
+      <div class="kpi"><div class="k">Reliability index</div><div class="v">β ${f2(r.betaLN)}</div><div class="s"><span class="pill ${perf[2]}">${perf[1]}</span> USACE (1997) · normal β ${f2(r.betaN)}</div></div>
+      <div class="kpi"><div class="k">Mean F</div><div class="v">${f3(r.mean)}</div><div class="s">SD ${f3(r.sd)} · COV ${f1(r.cov * 100)}% · design ${f3(r.deterministic)}</div></div>
+      <div class="kpi"><div class="k">5% – 95%</div><div class="v">${f2(r.p05)} – ${f2(r.p95)}</div><div class="s">median ${f3(r.p50)} · ${esc(r.methodName)}</div></div>
+    </div>
+    <h3 class="mt">Distribution of F</h3>${histSVG(r)}
+    <h3 class="mt">What matters most</h3><p class="note">Each variable alone moved one standard deviation either way, the others at their means.</p>${tornadoSVG(r)}`;
+  }
+  return out;
+}
+
 function seismicPanel() {
   const c = state.result?.cases.find((k) => k.key === "seismic");
   if (!state.project.seismic.on) return `<p class="explain">Earthquake checks are off. Turn them on under Earthquake.</p>`;
@@ -793,6 +880,7 @@ function aboutPanel() {
   <p><b>Armour.</b> Rock by Hudson and by Van der Meer (1988), or its shallow-water form (Van Gent et al. 2003) when h &lt; 3Hs, with the larger governing; EN 13383 gradings; toe by Van der Meer (1998); run-up and overtopping by EurOtop (2018). Accropode™ and Accropode™ II by Hudson with CLI's design KD (15 / 11.5 and 16 / 12.3), valid on 4:3 to 3:2 slopes; Accropode is a trademark of CLI, and units must be designed and placed to CLI's guidance.</p>
   <p><b>Rock.</b> Rock masses follow the generalised Hoek-Brown criterion (Hoek, Carranza-Torres and Corkum 2002) from GSI, mi, σci and D. Each slice takes the tangent to the envelope at the effective normal stress on its base (Balmer 1952); the solution is repeated with the new normal stresses until every slice carries the envelope strength. The equivalent c', φ' of Hoek et al. (2002) is in the verification set for comparison.</p>
   <p><b>Reinforcement.</b> Nails and anchors pull along their axis, limited by their strength and their bond beyond the slip. Geogrids pull horizontally where the slip cuts them, limited by their design strength and by pull-out of the shorter end, 2 Ci (c + σv tan φ) per metre. A row of piles or a sheet-pile wall adds its shear capacity per metre run (pile capacity / spacing) where the slip cuts it, against the movement. Every force enters the slices at its own point, in all methods.</p>
+  <p><b>Probability.</b> Each soil or rock property is lognormal around the value entered with its coefficient of variation; one variable per material and property. Latin hypercube samples from a fixed seed are solved on the critical surface of the load case by the governing method. The probability of failure is the share with F &lt; 1; β is given for a lognormal F, with the USACE (1997) performance levels. Properties are taken as independent, which is on the safe side for c' and φ'.</p>
   <p><b>Limits.</b> Typical soil values are starting points: use site data. Seepage lines are simplified (straight lines), not a flow net. Talus is a design aid; the engineer of record remains responsible.</p></div>`;
 }
 
@@ -818,6 +906,10 @@ document.addEventListener("click", (ev) => {
   if (b.dataset.view) { state.view = b.dataset.view; renderView(); return; }
   if (b.id === "btnTrials") { state.trials = !state.trials; renderView(); return; }
   if (b.id === "btnMotion") { state.motion = !state.motion; view3d?.setMotion(state.motion); renderView(); return; }
+  if (b.dataset.prob !== undefined) {
+    state.prob = { running: true, done: 0 };
+    run("prob", { caseKey: currentCase()?.key }); setBusy(true, "Sampling…"); renderPanel(); return;
+  }
   if (b.dataset.optimise !== undefined) {
     state.optimise = { running: true, steps: [] };
     run("optimise"); setBusy(true, "Optimising…"); renderPanel(); return;
@@ -1007,6 +1099,22 @@ function reportBlocks(snapshot) {
       B.push({ t: "note", text: "E and X are the interslice normal and shear forces on the downslope side of each slice (Fredlund and Krahn sign). All forces per metre run." });
     }
   });
+  const pr = state.prob?.result;
+  if (pr && !pr.error) {
+    const perf = performanceOf(pr.betaLN);
+    B.push({ t: "break" }, { t: "h1", text: `Probability: ${pr.case.name}` });
+    B.push({ t: "p", text: `${pr.n.toLocaleString()} Latin hypercube samples (seed ${pr.seed}) of lognormal properties, solved on the critical surface by ${pr.methodName}.` });
+    B.push({ t: "table", widths: [0.5, 0.5], rows: [
+      ["Probability of failure P(F < 1)", `${(pr.pf * 100).toFixed(2)}% (${pr.fails} of ${pr.n}); lognormal fit ${(pr.pfLN * 100).toFixed(3)}%`],
+      ["Reliability index β (lognormal)", `${f2(pr.betaLN)}, ${perf[1].toLowerCase()} (USACE 1997); normal β ${f2(pr.betaN)}`],
+      ["Mean and SD of F", `${f3(pr.mean)} and ${f3(pr.sd)} (COV ${f1(pr.cov * 100)}%); design F ${f3(pr.deterministic)}`],
+      ["5%, 50%, 95% of F", `${f3(pr.p05)}, ${f3(pr.p50)}, ${f3(pr.p95)}`],
+      ...pr.vars.map((v) => [v.name, `mean ${+v.mean.toPrecision(4)}, COV ${f1(v.cov * 100)}%`]),
+    ] });
+    B.push({ t: "img", svg: histSVG(pr).replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" '), w: 560, h: 190, widthCm: 15 }, { t: "caption", text: "Distribution of F; red: samples below 1." });
+    const tor = tornadoSVG(pr);
+    if (tor) { const h = +tor.match(/viewBox="0 0 560 (\d+(?:\.\d+)?)"/)?.[1] || 200; B.push({ t: "img", svg: tor.replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" '), w: 560, h, widthCm: 15 }, { t: "caption", text: "Sensitivity: each variable alone at its mean ± one standard deviation." }); }
+  }
   B.push({ t: "break" }, { t: "h1", text: "Method" });
   for (const m of aboutPanel().matchAll(/<p>([\s\S]*?)<\/p>/g)) B.push({ t: "p", text: m[1].replace(/<b>(.*?)<\/b>/g, "**$1**").replace(/<[^>]+>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&") });
   return B;
@@ -1052,7 +1160,8 @@ function toPNG(b) {
     img.onload = done; img.onerror = () => resolve(null);
     if (b.svg) {
       // the drawing uses the page's colour tokens; a picture on its own needs them spelt out
-      const svg = b.svg.replace(/var\(--grid\)/g, "#e1e0d9").replace(/var\(--muted\)/g, "#898781").replace(/var\(--surface\)/g, "#ffffff")
+      const LIGHT = { grid: "#e1e0d9", muted: "#898781", surface: "#ffffff", ink: "#0b0b0b", "ink-2": "#52514e", critical: "#d03b3b", "series-1": "#2a78d6" };
+      const svg = b.svg.replace(/var\(--([a-z0-9-]+)\)/g, (m, k) => LIGHT[k] || "#52514e")
         .replace("<svg ", `<svg width="${b.w}" height="${b.h}" font-family="Calibri, Arial, sans-serif" `);
       img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
     } else img.src = b.src;
@@ -1075,6 +1184,16 @@ async function wordReport() {
 // ------------------------------------------------------------------ start
 
 inputsEl().addEventListener("input", onInput);
+// the probability inputs live in the answer panel; they change the next run, not the answer
+$("#dpanel").addEventListener("change", (ev) => {
+  const k = ev.target.dataset?.pk;
+  if (!k) return;
+  const p = state.project;
+  p.prob = p.prob || {};
+  if (k === "n") p.prob.n = +ev.target.value;
+  else { p.prob.cov = p.prob.cov || {}; const v = +ev.target.value; if (Number.isFinite(v) && v >= 0) p.prob.cov[k.slice(4)] = v / 100; }
+  scheduleSave();
+});
 inputsEl().addEventListener("change", (ev) => { if (ev.target.tagName === "SELECT" || ev.target.type === "checkbox") return; onInput(ev); });
 inputsEl().addEventListener("click", onClick);
 window.addEventListener("resize", () => { if (state.view === "section") renderView(); });
