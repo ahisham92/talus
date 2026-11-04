@@ -71,6 +71,7 @@ const ICONS = {
   load: '<path d="M4 3v10M10 3v10M16 3v10" stroke="currentColor" stroke-width="1.6"/><path d="M2 12l2 3 2-3M8 12l2 3 2-3M14 12l2 3 2-3" fill="currentColor"/>',
   quake: '<path d="M1 10h3l2-6 3 12 3-9 2 5 2-2h3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>',
   design: '<path d="M4 16l4-4 3 3 6-8" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M13 7h4v4" fill="none" stroke="currentColor" stroke-width="1.8"/>',
+  reinf: '<path d="M3 4l14 6M3 9l14 6M5 2v16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
   gear: '<circle cx="10" cy="10" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 1v3M10 16v3M1 10h3M16 10h3M3.6 3.6l2.1 2.1M14.3 14.3l2.1 2.1M3.6 16.4l2.1-2.1M14.3 5.7l2.1-2.1" stroke="currentColor" stroke-width="1.6"/>',
 };
 const icon = (k) => `<svg class="icon" viewBox="0 0 20 20" aria-hidden="true">${ICONS[k] || ""}</svg>`;
@@ -93,22 +94,39 @@ function earthquakeItems() {
     { kind: "html", show: (p) => p.seismic.on, html: () => `<div class="note">kh = 0.5·ag·S·ST and kv = ±0.5·kh (EN 1998-5 4.1.3.3). Both directions of kv are checked. Talus also finds the yield acceleration and the Newmark displacement.</div>` },
   ];
 }
-function loadItems(withNails) {
+function loadItems() {
   const items = [
     { k: "load.q", l: "Surcharge on the crest", sub: "traffic, storage, cranes", u: "kPa", min: 0, max: 100, step: 1, slider: true, picks: [0, 5, 10, 20, 50] },
     { k: "load.setback", l: "Set back from the crest edge", u: "m", min: 0, max: 30, step: 0.5, show: (p) => +p.load.q > 0 },
     { k: "load.width", l: "Loaded width", u: "m", min: 0.5, max: 60, step: 0.5, show: (p) => +p.load.q > 0 },
   ];
-  if (withNails) items.push(
+  return items;
+}
+const NAIL_ITEMS = [
     { kind: "toggle", k: "nails.on", l: "Soil nails / anchors" },
     { k: "nails.rows", l: "Rows", u: "", min: 1, max: 12, step: 1, show: (p) => p.nails.on },
     { k: "nails.length", l: "Length", u: "m", min: 1, max: 30, step: 0.5, show: (p) => p.nails.on },
     { k: "nails.angle", l: "Inclination below horizontal", u: "°", min: 0, max: 45, step: 1, show: (p) => p.nails.on },
     { k: "nails.T", l: "Tensile capacity per row", sub: "per metre run of slope", u: "kN/m", min: 0, max: 1000, step: 5, show: (p) => p.nails.on },
     { k: "nails.qb", l: "Pull-out resistance", sub: "per metre of nail beyond the slip, per metre run", u: "kN/m²", min: 0, max: 500, step: 5, show: (p) => p.nails.on },
-  );
-  return items;
-}
+];
+const GRID_ITEMS = [
+    { kind: "toggle", k: "grids.on", l: "Geogrid layers in the fill", sub: "face to face; basal reinforcement on soft ground" },
+    { k: "grids.n", l: "Layers", u: "", min: 1, max: 40, step: 1, show: (p) => p.grids.on },
+    { k: "grids.bottom", l: "Lowest layer above ground", u: "m", min: 0, max: 10, step: 0.05, show: (p) => p.grids.on },
+    { k: "grids.spacing", l: "Vertical spacing", u: "m", min: 0.1, max: 3, step: 0.05, show: (p) => p.grids.on && +p.grids.n > 1 },
+    { k: "grids.T", l: "Design tensile strength", sub: "long-term, after reduction factors", u: "kN/m", min: 0, max: 2000, step: 5, show: (p) => p.grids.on },
+    { k: "grids.Ci", l: "Interaction coefficient Ci", sub: "pull-out: 2 Ci (c + σv tan φ) per metre of grid", u: "", min: 0, max: 1.2, step: 0.05, show: (p) => p.grids.on },
+];
+const pileItems = (where) => [
+    { kind: "toggle", k: "piles.on", l: "Row of piles or sheet piles", sub: "a shear force where the slip cuts them" },
+    { k: "piles.x", l: where.l, sub: where.sub, u: "m", step: 0.5, show: (p) => p.piles.on },
+    { k: "piles.length", l: "Length below ground", u: "m", min: 0.5, max: 60, step: 0.5, show: (p) => p.piles.on },
+    { k: "piles.Vp", l: "Shear capacity of one pile", sub: "design lateral resistance (or per metre of wall with spacing 1)", u: "kN", min: 0, max: 10000, step: 10, show: (p) => p.piles.on },
+    { k: "piles.spacing", l: "Spacing along the slope", u: "m", min: 0.1, max: 20, step: 0.1, show: (p) => p.piles.on },
+];
+const reinfSum = (p) => [p.nails?.on && "nails", p.grids?.on && `${p.grids.n} geogrid${+p.grids.n > 1 ? "s" : ""}`, p.piles?.on && "piles"].filter(Boolean).join(" · ") || "none";
+
 function designItems() {
   return [
     { kind: "seg", k: "design.basis", l: "Design basis", options: [["fos", "Factor of safety"], ["ec7", "Eurocode 7"]], onChange: (p) => { p.design.targets = null; } },
@@ -171,7 +189,8 @@ const SPEC = {
       { k: "water.back", l: "Depth below the crest edge", sub: "level behind it, falling under the face to the toe", u: "m", min: 0, max: 40, step: 0.25, slider: true, show: (p) => p.water.on },
       { k: "water.front", l: "Depth below the toe level", u: "m", min: 0, max: 20, step: 0.25, show: (p) => p.water.on },
     ] },
-    { g: "Loads", icon: "load", sum: (p) => `${p.load.q} kPa${p.nails?.on ? " · nails" : ""}`, items: loadItems(true) },
+    { g: "Loads", icon: "load", sum: (p) => `${p.load.q} kPa`, items: loadItems() },
+    { g: "Reinforcement", icon: "reinf", sum: reinfSum, items: [...NAIL_ITEMS, ...pileItems({ l: "Pile row, from the toe", sub: "horizontal distance into the slope" })] },
     { g: "Earthquake", icon: "quake", sum: (p) => (p.seismic.on ? `ag ${p.seismic.ag} g` : "off"), items: earthquakeItems() },
     { g: "Design", icon: "design", sum: (p) => (p.design.basis === "ec7" ? "EC7" : "FoS") + " · " + (METHOD_NAMES[p.design.method] || "").split(" ")[0], items: designItems() },
     { g: "Advanced", icon: "gear", items: advancedItems() },
@@ -191,7 +210,8 @@ const SPEC = {
       { k: "water.level", l: "Water level above ground", u: "m", min: 0, max: 30, step: 0.25, slider: true, show: (p) => p.water.on },
       { k: "water.low", l: "Level after a rapid drawdown", u: "m", min: 0, max: 30, step: 0.25, show: (p) => p.water.on },
     ] },
-    { g: "Loads", icon: "load", sum: (p) => `${p.load.q} kPa`, items: loadItems(false) },
+    { g: "Loads", icon: "load", sum: (p) => `${p.load.q} kPa`, items: loadItems() },
+    { g: "Reinforcement", icon: "reinf", sum: reinfSum, items: [...GRID_ITEMS, ...pileItems({ l: "Pile row, from the toe", sub: "into the slope being checked (land side, or water side for drawdown)" })] },
     { g: "Earthquake", icon: "quake", sum: (p) => (p.seismic.on ? `ag ${p.seismic.ag} g` : "off"), items: earthquakeItems() },
     { g: "Design", icon: "design", sum: (p) => (p.design.basis === "ec7" ? "EC7" : "FoS"), items: designItems() },
     { g: "Advanced", icon: "gear", items: advancedItems() },
@@ -213,6 +233,7 @@ const SPEC = {
       { k: "load.x1", l: "From x", u: "m", step: 0.5, show: (p) => +p.load.q > 0 },
       { k: "load.x2", l: "To x", u: "m", step: 0.5, show: (p) => +p.load.q > 0 },
     ] },
+    { g: "Reinforcement", icon: "reinf", sum: reinfSum, items: pileItems({ l: "Pile row at x", sub: "in the section's own coordinates" }) },
     { g: "Earthquake", icon: "quake", sum: (p) => (p.seismic.on ? `ag ${p.seismic.ag} g` : "off"), items: earthquakeItems() },
     { g: "Design", icon: "design", sum: (p) => (p.design.basis === "ec7" ? "EC7" : "FoS") + " · " + (METHOD_NAMES[p.design.method] || "").split(" ")[0], items: designItems() },
     { g: "Advanced", icon: "gear", items: advancedItems() },
@@ -247,7 +268,8 @@ const SPEC = {
       { kind: "soil", k: "core", l: "Core / backfill" },
       { kind: "soil", k: "soil", l: "Seabed soil" },
     ] },
-    { g: "Loads", icon: "load", sum: (p) => `${p.load.q} kPa`, items: loadItems(false) },
+    { g: "Loads", icon: "load", sum: (p) => `${p.load.q} kPa`, items: loadItems() },
+    { g: "Reinforcement", icon: "reinf", sum: reinfSum, items: [...GRID_ITEMS, ...pileItems({ l: "Pile row, from the toe", sub: "into the slope being checked (land side, or water side for drawdown)" })] },
     { g: "Earthquake", icon: "quake", sum: (p) => (p.seismic.on ? `ag ${p.seismic.ag} g` : "off"), items: earthquakeItems() },
     { g: "Design", icon: "design", sum: (p) => (p.design.basis === "ec7" ? "EC7" : "FoS"), items: designItems() },
     { g: "Advanced", icon: "gear", items: advancedItems(false) },
@@ -311,9 +333,10 @@ function soilWidget(it, p) {
   const ph = (k) => PRESETS[s.preset]?.[k] ?? "";
   const fld = (k, l, u, show = true) => (show ? `<div class="f"><span class="lab">${l}</span><span class="num"><input type="number" inputmode="decimal" data-k="${it.k}.${k}" value="${val(k)}" placeholder="${ph(k)}" step="any"><span class="unit">${u}</span></span></div>` : "");
   return `<div class="f wide"><span class="lab">${esc(it.l)}</span><select data-soil="${it.k}">${soilOptions(s.preset)}</select>
-    <div class="soil-sum"><span><b>γ</b> ${s.gamma}/${s.gsat} kN/m³</span><span><b>c'</b> ${s.c} kPa</span><span><b>φ'</b> ${s.phi}°</span>${s.clay && s.su > 0 ? `<span><b>su</b> ${s.su}${s.suGrad ? ` + ${s.suGrad}/m` : ""} kPa</span>` : ""}
+    <div class="soil-sum"><span><b>γ</b> ${s.gamma}/${s.gsat} kN/m³</span>${s.hb ? `<span><b>GSI</b> ${s.GSI}</span><span><b>mi</b> ${s.mi}</span><span><b>σci</b> ${s.sci} MPa</span>${s.D ? `<span><b>D</b> ${s.D}</span>` : ""}` : `<span><b>c'</b> ${s.c} kPa</span><span><b>φ'</b> ${s.phi}°</span>`}${!s.hb && s.clay && s.su > 0 ? `<span><b>su</b> ${s.su}${s.suGrad ? ` + ${s.suGrad}/m` : ""} kPa</span>` : ""}
     <button type="button" class="linkish" data-soiledit="${it.k}">${editing ? "Done" : "Use site values"}</button></div>
-    ${editing ? `<div class="subgrid">${fld("gamma", "Unit weight above water γ", "kN/m³")}${fld("gsat", "Saturated unit weight γsat", "kN/m³")}${fld("c", "Effective cohesion c'", "kPa")}${fld("phi", "Effective friction angle φ'", "°")}${fld("su", "Undrained strength su (clays)", "kPa", s.clay || it.alwaysSu)}${fld("suGrad", "su increase with depth", "kPa/m", s.clay || it.alwaysSu)}${fld("suMax", "su cap", "kPa", it.alwaysSu)}<div class="note">Blank fields keep the typical value shown. Typical values are a starting point; use site data for design.</div></div>` : ""}</div>`;
+    ${editing && s.hb ? `<div class="subgrid">${fld("gamma", "Unit weight above water γ", "kN/m³")}${fld("gsat", "Saturated unit weight γsat", "kN/m³")}${fld("GSI", "Geological Strength Index GSI", "")}${fld("mi", "Intact rock constant mi", "")}${fld("sci", "Intact compressive strength σci", "MPa")}${fld("D", "Disturbance D", "0–1")}<div class="note">Generalised Hoek-Brown (2002). Each slice takes the tangent strength at the normal stress on its base, iterated to convergence. Use D 0.7 to 1 for blasted faces.</div></div>` : ""}
+    ${editing && !s.hb ? `<div class="subgrid">${fld("gamma", "Unit weight above water γ", "kN/m³")}${fld("gsat", "Saturated unit weight γsat", "kN/m³")}${fld("c", "Effective cohesion c'", "kPa")}${fld("phi", "Effective friction angle φ'", "°")}${fld("su", "Undrained strength su (clays)", "kPa", s.clay || it.alwaysSu)}${fld("suGrad", "su increase with depth", "kPa/m", s.clay || it.alwaysSu)}${fld("suMax", "su cap", "kPa", it.alwaysSu)}<div class="note">Blank fields keep the typical value shown. Typical values are a starting point; use site data for design.</div></div>` : ""}</div>`;
 }
 
 function layersWidget(p) {
@@ -768,6 +791,8 @@ function aboutPanel() {
   <p><b>Load cases.</b> Cut slopes: long term (drained), short term (undrained clays), seismic. Embankments: end of construction, steady seepage, rapid drawdown, seismic. Revetments: high and low water, drawdown under the wave trough, seismic. Targets follow USACE EM 1110-2-1902 or, with Eurocode 7, the M2 partial factors with an over-design factor of 1.0.</p>
   <p><b>Earthquake.</b> Pseudo-static kh = 0.5·ag·S·ST, kv = ±0.5·kh (EN 1998-5), both kv directions checked; yield acceleration by bisection; permanent displacement by Jibson (2007).</p>
   <p><b>Armour.</b> Rock by Hudson and by Van der Meer (1988), or its shallow-water form (Van Gent et al. 2003) when h &lt; 3Hs, with the larger governing; EN 13383 gradings; toe by Van der Meer (1998); run-up and overtopping by EurOtop (2018). Accropode™ and Accropode™ II by Hudson with CLI's design KD (15 / 11.5 and 16 / 12.3), valid on 4:3 to 3:2 slopes; Accropode is a trademark of CLI, and units must be designed and placed to CLI's guidance.</p>
+  <p><b>Rock.</b> Rock masses follow the generalised Hoek-Brown criterion (Hoek, Carranza-Torres and Corkum 2002) from GSI, mi, σci and D. Each slice takes the tangent to the envelope at the effective normal stress on its base (Balmer 1952); the solution is repeated with the new normal stresses until every slice carries the envelope strength. The equivalent c', φ' of Hoek et al. (2002) is in the verification set for comparison.</p>
+  <p><b>Reinforcement.</b> Nails and anchors pull along their axis, limited by their strength and their bond beyond the slip. Geogrids pull horizontally where the slip cuts them, limited by their design strength and by pull-out of the shorter end, 2 Ci (c + σv tan φ) per metre. A row of piles or a sheet-pile wall adds its shear capacity per metre run (pile capacity / spacing) where the slip cuts it, against the movement. Every force enters the slices at its own point, in all methods.</p>
   <p><b>Limits.</b> Typical soil values are starting points: use site data. Seepage lines are simplified (straight lines), not a flow net. Talus is a design aid; the engineer of record remains responsible.</p></div>`;
 }
 
@@ -914,7 +939,7 @@ function reportValue(it, v) {
   return `${v} ${it.u || ""}`.trim();
 }
 
-const soilText = (s) => `${s.name}: γ ${s.gamma}/${s.gsat} kN/m³, c' ${s.c} kPa, φ' ${s.phi}°${s.clay && s.su ? `, su ${s.su}${s.suGrad ? ` + ${s.suGrad}/m` : ""}${s.suMax ? ` (max ${s.suMax})` : ""} kPa` : ""}`;
+const soilText = (s) => s.hb ? `${s.name}: γ ${s.gamma}/${s.gsat} kN/m³, Hoek-Brown GSI ${s.GSI}, mi ${s.mi}, σci ${s.sci} MPa, D ${s.D || 0}` : `${s.name}: γ ${s.gamma}/${s.gsat} kN/m³, c' ${s.c} kPa, φ' ${s.phi}°${s.clay && s.su ? `, su ${s.su}${s.suGrad ? ` + ${s.suGrad}/m` : ""}${s.suMax ? ` (max ${s.suMax})` : ""} kPa` : ""}`;
 const ptsText = (v) => parsePoints(v || "").map(([x, y]) => `(${+x.toFixed(2)}, ${+y.toFixed(2)})`).join(" ");
 
 /** The inputs as rows of a table, grouped as on screen. */

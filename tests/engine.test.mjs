@@ -168,3 +168,22 @@ test("Word report: a valid zip with the document, styles and images", async () =
   assert.ok(text.includes("T &amp; &lt;b&gt;") && text.includes("<w:b/>"));
   assert.ok(text.includes("PK\u0005\u0006"));
 });
+
+test("Hoek-Brown rock: on the critical surface every slice carries the envelope strength", async () => {
+  const { hbTangent, hoekBrown } = await import("../talus_app/static/engine/materials.js");
+  const c = analyse(complete({ type: "cut", soil: { preset: "rockHB" }, geom: { H: 20, cot: 0.5 }, water: { on: false }, seismic: { on: false }, load: { q: 0 } })).cases[0];
+  assert.ok(c.hb && c.hb.gap < 1e-4, "converged");
+  const hb = hoekBrown({ GSI: 45, mi: 10, sci: 25, D: 0 });
+  for (const s of c.slices.filter((s) => s.Neff > 0)) {
+    const tau = hbTangent(hb, Math.max(0, s.Neff / s.l)).tau;
+    assert.ok(Math.abs(s.S * c.F / s.l - tau) / tau < 2e-3, `slice τ ${s.S * c.F / s.l} vs ${tau}`);
+  }
+});
+
+test("reinforcement: a basal geogrid and a pile row make slopes safer", () => {
+  const e = { type: "embankment", soil: { preset: "softClay" }, seismic: { on: false }, water: { on: false } };
+  const F = (p) => analyse(complete(p)).cases[0].F;
+  assert.ok(F({ ...e, grids: { on: true, n: 1, T: 200 } }) > F(e) + 0.2);
+  const c = { type: "cut", seismic: { on: false } };
+  assert.ok(F({ ...c, piles: { on: true, x: 3, length: 12, Vp: 300, spacing: 2 } }) > F(c) + 0.1);
+});
