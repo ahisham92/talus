@@ -138,3 +138,20 @@ test("su is capped at its maximum", () => {
   const F = (suMax) => criticalCircle(prepare(slope({ layers: [{ top: null, mat: mat(suMax) }] })), { method: "bishop" }).F;
   assert.ok(F(30) < F(0));
 });
+
+test("block search: a weak seam below the toe governs, both ways round", () => {
+  const run = (flip, block) => {
+    const g = (s) => flip ? s.split("\n").map((l) => { const [x, y] = l.split(" ").map(Number); return `${70 - x} ${y}`; }).join("\n") : s;
+    return analyse(complete({ type: "section", seismic: { on: false }, advanced: { block },
+      ground: g("0 10\n20 10\n40 0\n70 0"), base: -10,
+      layers: [{ soil: { preset: "denseSand" } },
+        { soil: { preset: "softClay", c: 0, phi: 12 }, top: "0 -1\n70 -1" },
+        { soil: { preset: "denseSand" }, top: "0 -1.6\n70 -1.6" }],
+      water: { mode: "none" }, load: { q: 0 } })).cases[0];
+  };
+  const circle = run(false, false), block = run(false, true), flipped = run(true, true);
+  assert.equal(block.surface.kind, "block");
+  // a hand grid of two-wedge blocks on the seam gives 1.303 (MP); circles 1.44
+  assert.ok(block.F < 1.31 && block.F > 1.2 && block.F < circle.F - 0.1, `block ${block.F}, circle ${circle.F}`);
+  assert.ok(Math.abs(flipped.F - block.F) < 0.02, `mirrored ${flipped.F} vs ${block.F}`);
+});

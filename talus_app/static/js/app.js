@@ -119,6 +119,7 @@ function advancedItems(crack = true) {
   const it = [
     { k: "advanced.slices", l: "Slices", sub: "plus every geometric break", u: "", min: 10, max: 200, step: 5 },
     { kind: "toggle", k: "advanced.noncircular", l: "Also search non-circular surfaces" },
+    { kind: "toggle", k: "advanced.block", l: "Also search blocks along weak layers", sub: "wedges sliding just inside each lower layer or on the hard base" },
   ];
   if (crack) it.push({ k: "advanced.crack", l: "Tension crack depth", u: "m", min: 0, max: 10, step: 0.1 });
   return it;
@@ -642,7 +643,7 @@ function methodsPanel(c) {
   return `<div class="kpis">
       <div class="kpi"><div class="k">Factor of safety</div><div class="v" style="color:${fosColour(c.F, c.target)}">${f3(c.F)}</div><div class="s">needs ${f2(c.target)} · ${c.pass ? "passes" : "fails"} by ${f1(Math.abs(c.ratio - 1) * 100)}%</div></div>
       <div class="kpi"><div class="k">Sliding mass</div><div class="v">${fmt(c.weight, 0)} kN/m</div><div class="s">${fmt(c.weight / 9.81, 0)} t per metre run · depth ${f2(s.depth)} m</div></div>
-      <div class="kpi"><div class="k">Surface</div><div class="v">${s.circle ? "Circle" : "Non-circular"}</div><div class="s">${s.circle ? `centre (${f2(s.circle.xc)}, ${f2(s.circle.yc)}), R ${f2(s.circle.R)} m` : `${s.slip.length} nodes`}</div></div>
+      <div class="kpi"><div class="k">Surface</div><div class="v">${s.circle ? "Circle" : s.kind === "block" ? "Block" : "Non-circular"}</div><div class="s">${s.circle ? `centre (${f2(s.circle.xc)}, ${f2(s.circle.yc)}), R ${f2(s.circle.R)} m` : `${s.slip.length} nodes`}</div></div>
       ${c.lambda ? `<div class="kpi"><div class="k">Interslice λ</div><div class="v">${f3(c.lambda)}</div><div class="s">${esc(METHOD_NAMES[c.method])}</div></div>` : ""}
     </div>
     <p class="explain mt-sm">${esc(c.note)}${c.fellBack ? " The rigorous method did not converge on this surface, so Bishop is shown." : ""}${c.fromCircle ? ` A non-circular surface was found ${f1((1 - c.F / c.fromCircle) * 100)}% lower than the best circle.` : ""}</p>

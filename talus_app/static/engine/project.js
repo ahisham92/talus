@@ -62,7 +62,7 @@ export const DEFAULTS = {
     load: { q: 10, x1: 1, x2: 14 },
     seismic: { on: true, ag: 0.15, ground: "B" },
     design: { basis: "fos", method: "mp", targets: null },
-    advanced: { slices: 40, noncircular: false, crack: 0 },
+    advanced: { slices: 40, noncircular: false, block: true, crack: 0 },
   },
   revetment: {
     type: "revetment", name: "Rock revetment",
