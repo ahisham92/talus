@@ -12,6 +12,7 @@ import { rockArmour, accropode, toe, vanDerMeerNs, waveParams } from "./armour.j
 import { newmark } from "./analyse.js";
 import { hoekBrown, hbTangent, hbEquivalent } from "./materials.js";
 import { probabilistic, normCdf } from "./prob.js";
+import { seepage } from "./seep.js";
 
 const D = Math.PI / 180;
 
@@ -270,6 +271,27 @@ export const CHECKS = [
     run() {
       const t = toe({ Hs: 2, h: 10, ht: 7, rhoR: 2650, rhoW: 1025, Nod: 0.5 });
       return { expected: (2 + 6.2 * 0.7 ** 2.7) * 0.5 ** 0.15, rows: [["Talus Ns", t.Ns]], tol: 1e-12 };
+    },
+  },
+  {
+    id: "seep-confined", group: "Seepage",
+    title: "Confined flow through a block: linear head, Darcy discharge",
+    source: "20 m long, 5 m thick, k = 1e-5 m/s, heads 10 m and 6 m: q = k A Δh / L = 1.0e-5 m³/s per m, h(7 m) = 8.6 m",
+    run() {
+      const r = seepage({ ground: [[0, 5], [20, 5]], bottom: 0, layers: [{ top: [[0, 5], [20, 5]], k: 1e-5 }], left: 10, right: 6 }, { nx: 20, ny: 5, confined: true });
+      return { expected: 1e-5, rows: [["Talus q (m³/s per m)", r.q]], tol: 1e-9, also: [{ label: "Talus h at x = 7 m", value: r.head(7, 2.3), expected: 8.6, tol: 1e-9 }] };
+    },
+  },
+  {
+    id: "seep-dam", group: "Seepage",
+    title: "Unconfined flow through a rectangular dam (Dupuit–Charny)",
+    source: "Charny (1951): q = k (h1² − h2²) / 2L is exact for the discharge; L = 20 m, h1 = 8 m, h2 = 2 m, k = 1e-5 m/s gives 1.5e-5 m³/s per m",
+    run() {
+      const k = 1e-5, L = 20, h1 = 8, h2 = 2;
+      const dam = (nx, ny, H) => seepage({ ground: [[0, H], [L, H]], bottom: 0, layers: [{ top: [[0, H], [L, H]], k }], left: h1, right: h2 }, { nx, ny }).q;
+      const r2 = seepage({ ground: [[0, 12], [30, 12]], bottom: 0, layers: [{ top: [[0, 12], [30, 12]], k }], left: 10, right: 3 }, { nx: 60, ny: 30 }).q;
+      return { expected: k * (h1 * h1 - h2 * h2) / (2 * L), rows: [["Talus q, 40 × 30 mesh", dam(40, 30, 12)]], tol: 0.02,
+        also: [{ label: "L = 30 m, h1 = 10 m, h2 = 3 m", value: r2, expected: k * (100 - 9) / 60, tol: 0.02 }] };
     },
   },
   {
