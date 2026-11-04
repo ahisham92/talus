@@ -23,7 +23,7 @@ const state = {
   project: null, id: null, version: null,
   result: null, partial: [], seismic: null, selected: null,
   view: "3d", trials: false, motion: true, tab: "methods",
-  verify: null, optimise: null, prob: null, offline: false, dirty: false,
+  verify: null, optimise: null, prob: null, fem: null, offline: false, dirty: false,
 };
 
 // ------------------------------------------------------------------ helpers
@@ -571,6 +571,7 @@ function refreshSums() {
 function analyse() {
   state.partial = [];
   if (state.prob && !state.prob.running) state.prob = null;
+  if (state.fem && !state.fem.running) state.fem = null;
   state.seismic = null;
   state.analyseId = run("analyse");
   setBusy(true, "Calculating…");
@@ -616,6 +617,15 @@ function onWorker(ev) {
     state.prob = { result: m.result, running: false };
     if (m.result.error) toast(m.result.error, true);
     if (state.tab === "prob") renderPanel();
+  } else if (m.kind === "femStep") {
+    state.fem = { ...(state.fem || {}), running: true, runs: m.run, srf: m.srf };
+    setBusy(true, `Strength reduction ${f2(m.srf)}…`);
+    if (state.tab === "fem") renderPanel();
+  } else if (m.kind === "femDone") {
+    jobRunning = false; setBusy(false);
+    state.fem = { result: m.result, running: false };
+    if (m.result.error) toast(m.result.error, true);
+    if (state.tab === "fem") renderPanel();
   } else if (m.kind === "check") {
     state.verify.rows[m.i] = m;
     renderPanel();
@@ -733,7 +743,7 @@ function renderCases(partial) {
 
 const TABS = [
   ["methods", "Methods"], ["slices", "Slices"], ["armour", "Armour"], ["seismic", "Earthquake"],
-  ["optimise", "Optimise"], ["prob", "Probability"], ["verify", "Verification"], ["about", "How it works"],
+  ["optimise", "Optimise"], ["prob", "Probability"], ["fem", "Finite elements"], ["verify", "Verification"], ["about", "How it works"],
 ];
 function renderTabs() {
   const tabs = TABS.filter(([k]) => (k !== "armour" || state.project.type === "revetment") && (k !== "optimise" || state.project.type !== "section"));
@@ -751,6 +761,7 @@ function renderPanel() {
   else if (t === "seismic") P.innerHTML = seismicPanel();
   else if (t === "optimise") P.innerHTML = optimisePanel();
   else if (t === "prob") P.innerHTML = probPanel();
+  else if (t === "fem") P.innerHTML = femPanel();
   else if (t === "verify") P.innerHTML = verifyPanel();
   else if (t === "about") P.innerHTML = aboutPanel();
 }
@@ -907,6 +918,50 @@ function probPanel() {
   return out;
 }
 
+// ------------------------------------------------------------------ finite elements
+
+function femPanel() {
+  const c = currentCase(), st = state.fem;
+  if (!c) return "";
+  const r = st?.result && !st.result.error && st.result.case.key === c.key ? st.result : null;
+  let out = `<p class="explain">A second, independent answer for <b>${esc(c.name)}</b>: the slope as a continuum of finite elements, with the soil strengths divided by a factor until it can no longer stand (Griffiths and Lane 1999). No slip surface is assumed; the mechanism forms by itself.</p>
+    <div class="row mt-sm"><button class="btn btn-primary" data-fem ${st?.running ? "disabled" : ""}>${st?.running ? `Solving… trial ${st.runs || 0}${st.srf ? `, SRF ${f2(st.srf)}` : ""}` : r ? "Run again" : "Run the strength reduction"}</button><span class="note">Takes a few seconds: each trial factor runs up to 500 viscoplastic iterations.</span></div>`;
+  if (r) {
+    const d = c.F ? (r.F / c.F - 1) * 100 : NaN;
+    const agree = Math.abs(d) <= 5 ? ["good", "agrees"] : Math.abs(d) <= 10 ? ["warn", "close"] : ["bad", "differs"];
+    out += `<div class="kpis mt">
+      <div class="kpi"><div class="k">Finite element F</div><div class="v" style="color:${fosColour(r.F, c.target)}">${f2(r.F)}</div><div class="s">stable at ${f3(r.F)}, fails at ${f3(r.failedAt)} · needs ${f2(c.target)}</div></div>
+      <div class="kpi"><div class="k">Limit equilibrium F</div><div class="v">${f2(c.F)}</div><div class="s">${esc(METHOD_NAMES[c.method] || "")}</div></div>
+      <div class="kpi"><div class="k">Difference</div><div class="v">${d >= 0 ? "+" : ""}${f1(d)}%</div><div class="s"><span class="pill ${agree[0]}">${agree[1]}</span> within 5% is the usual agreement</div></div>
+      <div class="kpi"><div class="k">Model</div><div class="v">${r.elements} quads</div><div class="s">${r.dof.toLocaleString()} unknowns · ${r.runs} trials</div></div>
+    </div>
+    <div class="row mt-sm"><div class="seg" role="group" aria-label="Show">${[["fail", "At failure"], ["stable", "Last stable"]].map(([k, n]) => `<button type="button" data-fem-show="${k}" aria-pressed="${(state.femShow || "fail") === k}">${n}</button>`).join("")}</div><span class="note">${(state.femShow || "fail") === "fail" ? "Colour: the plastic shear strain added between the last stable factor and failure, which is the mechanism; the mesh moves as it does." : "Colour: plastic shear strain at the last stable factor; mesh displaced."} Exaggerated.</span></div>
+    ${femSVG(state.femShow === "stable" ? r.stable : r.mesh, c)}
+    ${r.reinforced ? `<div class="pill warn mt-sm">Nails, anchors, geogrids and piles are not in the finite element model: compare with the case without them.</div>` : ""}`;
+  }
+  return out;
+}
+
+function femSVG(m, c) {
+  if (!m) return "";
+  const W = 760, H = 300, pad = 12;
+  const x0 = Math.min(...m.X), x1 = Math.max(...m.X), y0 = Math.min(...m.Y), y1 = Math.max(...m.Y);
+  const s = Math.min((W - 2 * pad) / (x1 - x0), (H - 2 * pad) / (y1 - y0));
+  const ox = pad + ((W - 2 * pad) - s * (x1 - x0)) / 2, oy = pad + ((H - 2 * pad) - s * (y1 - y0)) / 2;
+  const dmax = Math.max(1e-12, ...m.dx.map((v, k) => Math.hypot(v, m.dy[k])));
+  const mag = 0.05 * (x1 - x0) / dmax;
+  const X = (k) => ox + (m.X[k] + mag * m.dx[k] - x0) * s, Y = (k) => H - oy - (m.Y[k] + mag * m.dy[k] - y0) * s;
+  const smax = Math.max(1e-12, ...m.shear);
+  const order = [0, 4, 1, 5, 2, 6, 3, 7];
+  const polys = m.els.map((e, i) => {
+    const t = Math.min(1, m.shear[i] / smax);
+    const col = t < 0.08 ? "var(--raised)" : `rgba(235, 104, 52, ${Math.min(1, 0.1 + t).toFixed(2)})`;
+    return `<path d="${order.map((a, k) => `${k ? "L" : "M"}${X(e[a]).toFixed(1)},${Y(e[a]).toFixed(1)}`).join("")}Z" fill="${col}" stroke="var(--grid)" stroke-width="0.5"/>`;
+  }).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" class="chart mt-sm" role="img" aria-label="Finite element mesh with the plastic shear strain">${polys}</svg>
+    <p class="note">${m.converged ? `Settled after ${m.iters} iterations.` : `Did not settle within ${m.iters} iterations: the failure mechanism is the orange band.`} Displacements are exaggerated; they come from E = 100 MPa and ν = 0.3, which do not change the factor of safety.</p>`;
+}
+
 function seismicPanel() {
   const c = state.result?.cases.find((k) => k.key === "seismic");
   if (!state.project.seismic.on) return `<p class="explain">Earthquake checks are off. Turn them on under Earthquake.</p>`;
@@ -960,6 +1015,7 @@ function aboutPanel() {
   <p><b>Methods.</b> One general limit equilibrium formulation (Fredlund and Krahn 1977) gives Bishop simplified, Janbu simplified (with Janbu's f0 correction), Spencer (constant interslice inclination) and Morgenstern-Price (half-sine). Ordinary is shown for comparison. The slices are solved one after another exactly for each F and λ, and λ is found where force and moment equilibrium give the same F.</p>
   <p><b>Flow net.</b> With the flow net on, pore pressures come from steady seepage solved by finite elements (linear triangles on a mesh that follows the ground) through each soil's permeability k and anisotropy kh/kv. The phreatic surface is found as SEEP/W and Slide do: above it the permeability falls to a small residual, ground above the outside water is a seepage face, and the iterations repeat until the heads settle. It reproduces Darcy flow exactly and the Dupuit–Charny discharge of a rectangular dam to within 2% (Verification). After a rapid drawdown the heads stay at the steady flow net, held at most at the ground surface.</p>
   <p><b>Staged drawdown.</b> Optionally, the embankment drawdown case uses the three-stage method of Duncan, Wright and Wong (1990), adopted in USACE EM 1110-2-1902 Appendix G. Stage 1 solves the slope at full water with steady seepage and takes the effective normal and shear stress on each slice base as its consolidation stresses. Stage 2 gives each slice in a soil that does not drain freely (k below 1e-5 m/s unless set) an undrained strength interpolated by the consolidation stress ratio Kc between the R envelope (Kc = 1) and the effective envelope (Kc = Kf), the lower if they cross. Stage 3 uses the drained strength where it is lower at the stage 2 effective stresses. All three are solved on the same surface, and the critical circle is searched with the staged F itself.</p>
+  <p><b>Finite elements.</b> The Finite elements tab gives an independent factor of safety by strength reduction (Griffiths and Lane 1999; Smith, Griffiths and Margetts): plane strain, eight-node quadrilaterals with reduced integration on a mesh that follows the ground and the base, elastic-viscoplastic Mohr-Coulomb with zero dilation, gravity switched on at once, water on the ground as a pressure, pore pressures subtracted for drained soils. c', tan φ' and su are divided by a trial factor until the iterations no longer settle; that factor, found by bisection, is F. It reproduces Griffiths and Lane's undrained example (1.45) and Bishop and Morgenstern's c'-φ' chart value (1.38) within the tolerances in Verification.</p>
   <p><b>Load cases.</b> Cut slopes: long term (drained), short term (undrained clays), seismic. Embankments: end of construction, steady seepage, rapid drawdown, seismic. Revetments: high and low water, drawdown under the wave trough, seismic. Targets follow USACE EM 1110-2-1902 or, with Eurocode 7, the M2 partial factors with an over-design factor of 1.0.</p>
   <p><b>Earthquake.</b> Pseudo-static kh = 0.5·ag·S·ST, kv = ±0.5·kh (EN 1998-5), both kv directions checked; yield acceleration by bisection; permanent displacement by Jibson (2007).</p>
   <p><b>Armour.</b> Rock by Hudson and by Van der Meer (1988), or its shallow-water form (Van Gent et al. 2003) when h &lt; 3Hs, with the larger governing; EN 13383 gradings; toe by Van der Meer (1998); run-up and overtopping by EurOtop (2018). Accropode™ and Accropode™ II by Hudson with CLI's design KD (15 / 11.5 and 16 / 12.3), valid on 4:3 to 3:2 slopes; Accropode is a trademark of CLI, and units must be designed and placed to CLI's guidance.</p>
@@ -995,6 +1051,12 @@ document.addEventListener("click", (ev) => {
     state.prob = { running: true, done: 0 };
     run("prob", { caseKey: currentCase()?.key }); setBusy(true, "Sampling…"); renderPanel(); return;
   }
+  if (b.dataset.fem !== undefined) {
+    const c = currentCase();
+    state.fem = { running: true, runs: 0 };
+    run("fem", { caseKey: c?.key, guess: c?.F }); setBusy(true, "Strength reduction…"); renderPanel(); return;
+  }
+  if (b.dataset.femShow) { state.femShow = b.dataset.femShow; renderPanel(); return; }
   if (b.dataset.optimise !== undefined) {
     state.optimise = { running: true, steps: [] };
     run("optimise"); setBusy(true, "Optimising…"); renderPanel(); return;
@@ -1200,6 +1262,14 @@ function reportBlocks(snapshot) {
     const tor = tornadoSVG(pr);
     if (tor) { const h = +tor.match(/viewBox="0 0 560 (\d+(?:\.\d+)?)"/)?.[1] || 200; B.push({ t: "img", svg: tor.replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" '), w: 560, h, widthCm: 15 }, { t: "caption", text: "Sensitivity: each variable alone at its mean ± one standard deviation." }); }
   }
+  const fe = state.fem?.result;
+  if (fe && !fe.error) {
+    const cc = r.cases.find((k) => k.key === fe.case.key);
+    B.push({ t: "h1", text: `Finite element strength reduction: ${fe.case.name}` });
+    B.push({ t: "p", text: `${fe.elements} eight-node quadrilaterals (${fe.dof} unknowns), elastic-viscoplastic Mohr-Coulomb with ψ = 0, gravity switched on, strengths reduced until the solution no longer converges in 500 iterations (Griffiths and Lane 1999). F = ${f3(fe.F)} (fails at ${f3(fe.failedAt)}), against ${f3(cc?.F)} by limit equilibrium.` });
+    const svg = femSVG(fe.mesh, cc).match(/<svg[\s\S]*?<\/svg>/)?.[0];
+    if (svg) B.push({ t: "img", svg: svg.replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" '), w: 760, h: 300, widthCm: 16 }, { t: "caption", text: "Plastic shear strain at failure on the displaced mesh (exaggerated)." });
+  }
   B.push({ t: "break" }, { t: "h1", text: "Method" });
   for (const m of aboutPanel().matchAll(/<p>([\s\S]*?)<\/p>/g)) B.push({ t: "p", text: m[1].replace(/<b>(.*?)<\/b>/g, "**$1**").replace(/<[^>]+>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&") });
   return B;
@@ -1245,7 +1315,7 @@ function toPNG(b) {
     img.onload = done; img.onerror = () => resolve(null);
     if (b.svg) {
       // the drawing uses the page's colour tokens; a picture on its own needs them spelt out
-      const LIGHT = { grid: "#e1e0d9", muted: "#898781", surface: "#ffffff", ink: "#0b0b0b", "ink-2": "#52514e", critical: "#d03b3b", "series-1": "#2a78d6" };
+      const LIGHT = { grid: "#e1e0d9", raised: "#f4f3ef", muted: "#898781", surface: "#ffffff", ink: "#0b0b0b", "ink-2": "#52514e", critical: "#d03b3b", "series-1": "#2a78d6" };
       const svg = b.svg.replace(/var\(--([a-z0-9-]+)\)/g, (m, k) => LIGHT[k] || "#52514e")
         .replace("<svg ", `<svg width="${b.w}" height="${b.h}" font-family="Calibri, Arial, sans-serif" `);
       img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
