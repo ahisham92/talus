@@ -115,3 +115,26 @@ test("benches: a berm makes the same slopes safer", () => {
     geom: { berms: { on: true, rows: [{ h: 4, cot: 1.5, berm }, { h: 4, cot: 1.5 }] } } })).cases[0].F;
   assert.ok(F(5) > F(0.01));
 });
+
+test("any section: pasted points are read whatever the separator", async () => {
+  const { parsePoints } = await import("../talus_app/static/engine/project.js");
+  assert.deepEqual(parsePoints("10, 2\n0\t1\n5 1.5\nnot a point\n"), [[0, 1], [5, 1.5], [10, 2]]);
+});
+
+test("any section: the WP50 drained section gives the same F as the hand-built model", () => {
+  const ground = "-15 11.71\n0 11.71\n15 5.71\n19 5.71\n30.42 0\n62 0";
+  const r = analyse(complete({ type: "section", seismic: { on: false }, ground, base: -14.9,
+    layers: [
+      { soil: { preset: "sand", gamma: 21.68, gsat: 21.68, c: 5, phi: 32 } },
+      { soil: { preset: "sand", gamma: 22.37, gsat: 22.37, c: 40, phi: 7 }, top: "-15 6.2\n62 6.2" },
+      { soil: { preset: "sand", gamma: 21, gsat: 21, c: 2, phi: 34 }, top: "-15 -6.9\n62 -6.9" }],
+    water: { mode: "line", line: ground }, load: { q: 10, x1: -14.6, x2: -1 } }));
+  // Talus as built by hand for the WP50 comparison: 1.261 (report: 1.271)
+  assert.ok(Math.abs(r.cases[0].F - 1.261) < 0.01, `F = ${r.cases[0].F}`);
+});
+
+test("su is capped at its maximum", () => {
+  const mat = (suMax) => ({ name: "Clay", gamma: 18, gsat: 18, kind: "undrained", su: 20, suGrad: 10, suMax });
+  const F = (suMax) => criticalCircle(prepare(slope({ layers: [{ top: null, mat: mat(suMax) }] })), { method: "bishop" }).F;
+  assert.ok(F(30) < F(0));
+});

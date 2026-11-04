@@ -1,6 +1,6 @@
 // Talus — the page: inputs on the left, the live answer on the right.
 // Every change recalculates in a worker and redraws; projects save themselves.
-import { DEFAULTS, complete, BASES, GROUND_S, armourDesign } from "../engine/project.js";
+import { DEFAULTS, complete, BASES, GROUND_S, armourDesign, parsePoints } from "../engine/project.js";
 import { PRESETS, PRESET_KEYS, soilFrom } from "../engine/materials.js";
 import { METHOD_NAMES } from "../engine/lem.js";
 import { rockArmour, accropode, damageLevels, COEFFS } from "../engine/armour.js";
@@ -77,6 +77,7 @@ const icon = (k) => `<svg class="icon" viewBox="0 0 20 20" aria-hidden="true">${
 const KINDS = [
   ["cut", "Cut slope", '<path d="M2 24h18l14-16h18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/><path d="M2 24h18l14-16h18v18H2z" fill="currentColor" opacity=".15"/>'],
   ["embankment", "Embankment", '<path d="M2 24h12l10-14h8l10 14h10" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/><path d="M14 24l10-14h8l10 14z" fill="currentColor" opacity=".18"/>'],
+  ["section", "Any section", '<path d="M2 22h10l6-8h6l6-6h20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/><path d="M2 26h50M2 18h14" stroke="currentColor" stroke-width="1.2" stroke-dasharray="3 2" opacity=".6"/>'],
   ["revetment", "Revetment", '<path d="M2 20h14l16-13h20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/><path d="M2 15c3-2 6-2 9 0s6 2 9 0" fill="none" stroke="#2a78d6" stroke-width="2"/><circle cx="21" cy="15" r="2" fill="currentColor"/><circle cx="25" cy="12" r="2" fill="currentColor"/><circle cx="29" cy="9" r="2" fill="currentColor"/>'],
 ];
 
@@ -193,6 +194,27 @@ const SPEC = {
     { g: "Design", icon: "design", sum: (p) => (p.design.basis === "ec7" ? "EC7" : "FoS"), items: designItems() },
     { g: "Advanced", icon: "gear", items: advancedItems() },
   ],
+  section: [
+    { g: "Section", icon: "shape", open: true, sum: (p) => `${parsePoints(p.ground).length} ground points`, items: [
+      { kind: "points", k: "ground", l: "Ground surface", sub: "x, y per line, left to right. Paste from Excel or CAD." },
+      { k: "base", l: "Hard base level", sub: "no slip goes below it", u: "m", step: 0.5 },
+    ] },
+    { g: "Layers", icon: "ground", open: true, sum: (p) => `${(p.layers || []).length} layers`, items: [{ kind: "layers" }] },
+    { g: "Water", icon: "water", sum: (p) => ({ none: "none", line: "water line", ru: `ru ${p.water.ru}` }[p.water.mode] || ""), items: [
+      { kind: "seg", k: "water.mode", l: "Pore water", options: [["none", "None"], ["line", "Water line"], ["ru", "ru"]] },
+      { kind: "points", k: "water.line", l: "Piezometric line", sub: "x, y per line. Above the ground it is ponded water.", show: (p) => p.water.mode === "line" },
+      { kind: "html", show: (p) => p.water.mode === "line", html: () => `<button type="button" class="linkish" data-copy-ground>Put the water at the ground surface</button>` },
+      { k: "water.ru", l: "Pore pressure ratio ru", u: "", min: 0, max: 1, step: 0.05, show: (p) => p.water.mode === "ru" },
+    ] },
+    { g: "Loads", icon: "load", sum: (p) => `${p.load.q} kPa`, items: [
+      { k: "load.q", l: "Surcharge", u: "kPa", min: 0, max: 200, step: 1, slider: true, picks: [0, 5, 10, 20, 50] },
+      { k: "load.x1", l: "From x", u: "m", step: 0.5, show: (p) => +p.load.q > 0 },
+      { k: "load.x2", l: "To x", u: "m", step: 0.5, show: (p) => +p.load.q > 0 },
+    ] },
+    { g: "Earthquake", icon: "quake", sum: (p) => (p.seismic.on ? `ag ${p.seismic.ag} g` : "off"), items: earthquakeItems() },
+    { g: "Design", icon: "design", sum: (p) => (p.design.basis === "ec7" ? "EC7" : "FoS") + " · " + (METHOD_NAMES[p.design.method] || "").split(" ")[0], items: designItems() },
+    { g: "Advanced", icon: "gear", items: advancedItems() },
+  ],
   revetment: [
     { g: "Shape", icon: "shape", open: true, sum: (p) => `+${p.geom.crest} to ${p.geom.toe} · 1:${p.geom.cot}`, items: [
       { k: "geom.crest", l: "Crest level", u: "m", min: -5, max: 20, step: 0.1, slider: true },
@@ -270,6 +292,12 @@ function item(it, p) {
   if (kind === "soil") return soilWidget(it, p);
   if (kind === "targets") return targetsWidget(p);
   if (kind === "benches") return benchesWidget(p);
+  if (kind === "points") {
+    const v = get(p, it.k) ?? "";
+    const n = parsePoints(v).length;
+    return `<div class="f wide">${lab}<textarea class="pts" data-k="${it.k}" rows="${Math.min(10, Math.max(3, String(v).split("\n").length + 1))}" spellcheck="false" aria-label="${esc(it.l)}">${esc(v)}</textarea><span class="note" data-ptcount="${it.k}">${n} points</span></div>`;
+  }
+  if (kind === "layers") return layersWidget(p);
   return "";
 }
 
@@ -283,7 +311,20 @@ function soilWidget(it, p) {
   return `<div class="f wide"><span class="lab">${esc(it.l)}</span><select data-soil="${it.k}">${soilOptions(s.preset)}</select>
     <div class="soil-sum"><span><b>γ</b> ${s.gamma}/${s.gsat} kN/m³</span><span><b>c'</b> ${s.c} kPa</span><span><b>φ'</b> ${s.phi}°</span>${s.clay && s.su > 0 ? `<span><b>su</b> ${s.su}${s.suGrad ? ` + ${s.suGrad}/m` : ""} kPa</span>` : ""}
     <button type="button" class="linkish" data-soiledit="${it.k}">${editing ? "Done" : "Use site values"}</button></div>
-    ${editing ? `<div class="subgrid">${fld("gamma", "Unit weight above water γ", "kN/m³")}${fld("gsat", "Saturated unit weight γsat", "kN/m³")}${fld("c", "Effective cohesion c'", "kPa")}${fld("phi", "Effective friction angle φ'", "°")}${fld("su", "Undrained strength su (clays)", "kPa", s.clay)}${fld("suGrad", "su increase with depth", "kPa/m", s.clay)}<div class="note">Blank fields keep the typical value shown. Typical values are a starting point; use site data for design.</div></div>` : ""}</div>`;
+    ${editing ? `<div class="subgrid">${fld("gamma", "Unit weight above water γ", "kN/m³")}${fld("gsat", "Saturated unit weight γsat", "kN/m³")}${fld("c", "Effective cohesion c'", "kPa")}${fld("phi", "Effective friction angle φ'", "°")}${fld("su", "Undrained strength su (clays)", "kPa", s.clay || it.alwaysSu)}${fld("suGrad", "su increase with depth", "kPa/m", s.clay || it.alwaysSu)}${fld("suMax", "su cap", "kPa", it.alwaysSu)}<div class="note">Blank fields keep the typical value shown. Typical values are a starting point; use site data for design.</div></div>` : ""}</div>`;
+}
+
+function layersWidget(p) {
+  const L = p.layers || [];
+  const cards = L.map((layer, i) => {
+    const soil = soilWidget({ k: `layers.${i}.soil`, l: "Material", alwaysSu: true }, p);
+    const top = i === 0 ? `<div class="note">Its top is the ground surface.</div>`
+      : `<div class="f wide"><span class="lab">Top of this layer<small>x, y per line; it carries on flat to both ends</small></span><textarea class="pts" data-k="layers.${i}.top" rows="3" spellcheck="false">${esc(layer.top || "")}</textarea></div>`;
+    return `<div class="bench"><div class="bench-head"><input class="lname" type="text" data-k="layers.${i}.soil.name" value="${esc(layer.soil?.name || "")}" placeholder="Layer ${i + 1}" aria-label="Layer name" maxlength="40">
+      ${L.length > 1 ? `<button type="button" class="linkish" data-layer-del="${i}">Remove</button>` : ""}</div>${soil}${top}</div>`;
+  }).join("");
+  return `<div class="f wide"><span class="lab">From the top down<small>each layer lies below its top line and above the next one</small></span>${cards}
+    <button type="button" class="btn btn-ghost btn-sm" data-layer-add>Add a layer</button></div>`;
 }
 
 function benchesWidget(p) {
@@ -313,16 +354,18 @@ function onInput(ev) {
   if (el.dataset.k) {
     let v;
     if (el.type === "checkbox") v = el.checked;
-    else if (el.tagName === "SELECT") v = el.value;
+    else if (el.tagName === "SELECT" || el.tagName === "TEXTAREA" || el.type === "text") v = el.value;
     else v = el.value === "" ? null : +el.value;
     set(p, el.dataset.k, v);
     for (const G of SPEC[p.type]) for (const it of G.items) if (it.k === el.dataset.k && it.onChange) it.onChange(p);
     if (el.type === "range") { const n = el.parentElement.querySelector(`input[type=number][data-k="${el.dataset.k}"]`); if (n) n.value = el.value; }
     if (el.type === "number") { const r = el.parentElement.parentElement.querySelector(`input[type=range][data-k="${el.dataset.k}"]`); if (r && el.value !== "") r.value = el.value; }
+    if (el.tagName === "TEXTAREA") { const c = $(`[data-ptcount="${el.dataset.k}"]`, inputsEl()); if (c) c.textContent = `${parsePoints(el.value).length} points`; }
     const structural = el.type === "checkbox" || el.tagName === "SELECT";
     changed(structural);
   } else if (el.dataset.soil) {
-    set(p, el.dataset.soil, { preset: el.value, _edit: get(p, el.dataset.soil)?._edit });
+    const old = get(p, el.dataset.soil) || {};
+    set(p, el.dataset.soil, { preset: el.value, _edit: old._edit, ...(old.name ? { name: old.name } : {}) });
     changed(true);
   } else if (el.dataset.target) {
     p.design.targets = { ...(p.design.targets || {}), [el.dataset.target]: +el.value };
@@ -341,6 +384,17 @@ function onClick(ev) {
     for (const G of SPEC[p.type]) for (const it of G.items) if (it.k === b.dataset.seg && it.onChange) it.onChange(p);
     changed(true); return;
   }
+  if (b.dataset.layerAdd !== undefined) {
+    const L = p.layers || (p.layers = []);
+    const pts = parsePoints(p.ground);
+    const x0 = pts[0]?.[0] ?? 0, x1 = pts[pts.length - 1]?.[0] ?? 50;
+    const prev = L.length > 1 ? parsePoints(L[L.length - 1].top) : null;
+    const y = prev?.length ? prev[0][1] - 3 : Math.min(...pts.map((q) => q[1])) - 3;
+    L.push({ soil: { preset: "stiffClay", name: `Layer ${L.length + 1}` }, top: `${x0}, ${y}\n${x1}, ${y}` });
+    changed(true); return;
+  }
+  if (b.dataset.layerDel !== undefined) { p.layers.splice(+b.dataset.layerDel, 1); changed(true); return; }
+  if (b.dataset.copyGround !== undefined) { p.water.line = p.ground; changed(true); return; }
   if (b.dataset.benchAdd !== undefined) {
     const rows = bermRows(p), last = rows[rows.length - 1] || { h: 3, cot: 2 };
     if (rows.length) rows[rows.length - 1].berm = rows[rows.length - 1].berm || 4;
@@ -563,7 +617,7 @@ const TABS = [
   ["optimise", "Optimise"], ["verify", "Verification"], ["about", "How it works"],
 ];
 function renderTabs() {
-  const tabs = TABS.filter(([k]) => k !== "armour" || state.project.type === "revetment");
+  const tabs = TABS.filter(([k]) => (k !== "armour" || state.project.type === "revetment") && (k !== "optimise" || state.project.type !== "section"));
   if (!tabs.find(([k]) => k === state.tab)) state.tab = "methods";
   $("#dtabs").innerHTML = tabs.map(([k, n]) => `<button role="tab" data-tab="${k}" aria-selected="${k === state.tab}">${n}</button>`).join("");
 }

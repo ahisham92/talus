@@ -179,6 +179,7 @@ function num(v, d) { return Number.isFinite(+v) && v !== "" && v !== null ? +v :
  */
 export function steepestSafe(project, opt = {}) {
   const p = complete(project);
+  if (p.type === "section") return { cot: null, message: "A drawn section has no single slope to vary: change the points and watch F." };
   const lo0 = p.type === "revetment" ? 1.3 : p.type === "embankment" ? 1 : 0.25;
   const hi0 = 6;
   const check = (cot) => {
