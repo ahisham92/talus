@@ -201,3 +201,34 @@ test("probabilistic: a dry frictional slope gives the closed-form lognormal answ
   assert.ok(Math.abs(r.pf - normCdf(-beta)) < 3 * r.pfSE + 0.002, `pf ${r.pf} vs ${normCdf(-beta)}`);
   assert.equal(r.sens[0].prop, "tanphi");
 });
+
+test("flow net: equal water at both ends gives the hydrostatic water line's F", async () => {
+  const { buildCases } = await import("../talus_app/static/engine/project.js");
+  const { analyseCase } = await import("../talus_app/static/engine/analyse.js");
+  const ground = "0, 10\n20, 10\n40, 0\n70, 0";
+  const layers = [{ soil: { preset: "sand" }, top: "" }, { soil: { preset: "firmClay" }, top: "0, -2\n70, -2" }];
+  const run = (water) => {
+    const b = buildCases({ type: "section", ground, base: -12, layers, water, load: { q: 0 }, seismic: { on: false } });
+    return { b, F: analyseCase(b.cases[0], { method: "mp", slices: 40 }).F };
+  };
+  const line = run({ mode: "line", line: "0, 3\n70, 3" });
+  const flow = run({ mode: "flow", left: 3, right: 3 });
+  assert.ok(flow.b.geometry.flow.q < 1e-9, `no flow: ${flow.b.geometry.flow.q}`);
+  assert.ok(Math.abs(flow.F / line.F - 1) < 2e-3, `flow net ${flow.F} vs line ${line.F}`);
+  // a higher level on the left drives seepage towards the face and lowers F
+  const wet = run({ mode: "flow", left: 8, right: 0 });
+  assert.ok(wet.b.geometry.flow.q > 0 && wet.F < line.F, `seepage F ${wet.F}`);
+});
+
+test("flow net: embankment steady seepage and drawdown solve", async () => {
+  const { buildCases } = await import("../talus_app/static/engine/project.js");
+  const { analyseCase } = await import("../talus_app/static/engine/analyse.js");
+  const b = buildCases({ type: "embankment", soil: { preset: "sand" }, water: { on: true, level: 4, low: 0, flow: true }, seismic: { on: false } });
+  for (const c of b.cases) {
+    const r = analyseCase(c, { method: "mp", slices: 40 });
+    assert.ok(Number.isFinite(r.F) && r.F > 0.8 && r.F < 4, `${c.key}: ${r.F}`);
+  }
+  // water stands on the upstream face and leaves at the downstream toe
+  assert.ok(Math.abs(b.geometry.piezo[0][1] - 4) < 1e-6);
+  assert.ok(Math.abs(b.geometry.piezo[b.geometry.piezo.length - 1][1]) < 1e-6);
+});

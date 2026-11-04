@@ -189,6 +189,7 @@ const SPEC = {
       { kind: "toggle", k: "water.on", l: "Groundwater" },
       { k: "water.back", l: "Depth below the crest edge", sub: "level behind it, falling under the face to the toe", u: "m", min: 0, max: 40, step: 0.25, slider: true, show: (p) => p.water.on },
       { k: "water.front", l: "Depth below the toe level", u: "m", min: 0, max: 20, step: 0.25, show: (p) => p.water.on },
+      { kind: "toggle", k: "water.flow", l: "Flow net (finite elements)", sub: "pore pressures from steady seepage through each soil's permeability k, between these two levels", show: (p) => p.water.on },
     ] },
     { g: "Loads", icon: "load", sum: (p) => `${p.load.q} kPa`, items: loadItems() },
     { g: "Reinforcement", icon: "reinf", sum: reinfSum, items: [...NAIL_ITEMS, ...pileItems({ l: "Pile row, from the toe", sub: "horizontal distance into the slope" })] },
@@ -210,6 +211,7 @@ const SPEC = {
       { kind: "toggle", k: "water.on", l: "Water held against it (river, canal, pond)" },
       { k: "water.level", l: "Water level above ground", u: "m", min: 0, max: 30, step: 0.25, slider: true, show: (p) => p.water.on },
       { k: "water.low", l: "Level after a rapid drawdown", u: "m", min: 0, max: 30, step: 0.25, show: (p) => p.water.on },
+      { kind: "toggle", k: "water.flow", l: "Flow net (finite elements)", sub: "seepage through the fill and foundation by their permeabilities k, instead of a straight line to the toe", show: (p) => p.water.on },
     ] },
     { g: "Loads", icon: "load", sum: (p) => `${p.load.q} kPa`, items: loadItems() },
     { g: "Reinforcement", icon: "reinf", sum: reinfSum, items: [...GRID_ITEMS, ...pileItems({ l: "Pile row, from the toe", sub: "into the slope being checked (land side, or water side for drawdown)" })] },
@@ -223,8 +225,11 @@ const SPEC = {
       { k: "base", l: "Hard base level", sub: "no slip goes below it", u: "m", step: 0.5 },
     ] },
     { g: "Layers", icon: "ground", open: true, sum: (p) => `${(p.layers || []).length} layers`, items: [{ kind: "layers" }] },
-    { g: "Water", icon: "water", sum: (p) => ({ none: "none", line: "water line", ru: `ru ${p.water.ru}` }[p.water.mode] || ""), items: [
-      { kind: "seg", k: "water.mode", l: "Pore water", options: [["none", "None"], ["line", "Water line"], ["ru", "ru"]] },
+    { g: "Water", icon: "water", sum: (p) => ({ none: "none", line: "water line", ru: `ru ${p.water.ru}`, flow: "flow net" }[p.water.mode] || ""), items: [
+      { kind: "seg", k: "water.mode", l: "Pore water", options: [["none", "None"], ["line", "Water line"], ["flow", "Flow net"], ["ru", "ru"]] },
+      { k: "water.left", l: "Water level at the left end", sub: "blank: no flow across the left end", u: "m", min: -500, max: 3000, step: 0.25, blank: true, ph: "none", show: (p) => p.water.mode === "flow" },
+      { k: "water.right", l: "Water level at the right end", sub: "blank: no flow across the right end", u: "m", min: -500, max: 3000, step: 0.25, blank: true, ph: "none", show: (p) => p.water.mode === "flow" },
+      { kind: "html", show: (p) => p.water.mode === "flow", html: () => `<div class="note">Steady seepage by finite elements through each layer's permeability k. The water stands on the ground wherever the ground near an end is below its level; elsewhere the ground is a seepage face.</div>` },
       { kind: "points", k: "water.line", l: "Piezometric line", sub: "x, y per line. Above the ground it is ponded water.", show: (p) => p.water.mode === "line" },
       { kind: "html", show: (p) => p.water.mode === "line", html: () => `<button type="button" class="linkish" data-copy-ground>Put the water at the ground surface</button>` },
       { k: "water.ru", l: "Pore pressure ratio ru", u: "", min: 0, max: 1, step: 0.05, show: (p) => p.water.mode === "ru" },
@@ -302,7 +307,7 @@ function item(it, p) {
   if (kind === "num") {
     const v = get(p, it.k);
     const val = v === null || v === undefined ? "" : v;
-    return `<div class="f">${lab}<span class="num"><input type="number" inputmode="decimal" data-k="${it.k}" value="${val}" step="${it.step ?? "any"}" ${it.min !== undefined ? `min="${it.min}"` : ""} ${it.max !== undefined ? `max="${it.max}"` : ""} ${it.blank ? 'placeholder="auto"' : ""}><span class="unit">${esc(it.u || "")}</span></span>${it.slider ? `<input type="range" data-k="${it.k}" min="${it.min}" max="${it.max}" step="${it.step}" value="${val}" aria-label="${esc(it.l)}">` : ""}${it.picks ? `<div class="picks" style="grid-column:1/-1">${it.picks.map((v2) => `<button type="button" data-pick="${it.k}" data-v="${v2}">${v2}</button>`).join("")}</div>` : ""}</div>`;
+    return `<div class="f">${lab}<span class="num"><input type="number" inputmode="decimal" data-k="${it.k}" value="${val}" step="${it.step ?? "any"}" ${it.min !== undefined ? `min="${it.min}"` : ""} ${it.max !== undefined ? `max="${it.max}"` : ""} ${it.blank ? `placeholder="${it.ph || "auto"}"` : ""}><span class="unit">${esc(it.u || "")}</span></span>${it.slider ? `<input type="range" data-k="${it.k}" min="${it.min}" max="${it.max}" step="${it.step}" value="${val}" aria-label="${esc(it.l)}">` : ""}${it.picks ? `<div class="picks" style="grid-column:1/-1">${it.picks.map((v2) => `<button type="button" data-pick="${it.k}" data-v="${v2}">${v2}</button>`).join("")}</div>` : ""}</div>`;
   }
   if (kind === "toggle") return `<label class="toggle"><span>${esc(it.l)}</span><input type="checkbox" data-k="${it.k}" ${get(p, it.k) ? "checked" : ""}></label>`;
   if (kind === "select") {
@@ -332,12 +337,14 @@ function soilWidget(it, p) {
   const editing = spec._edit;
   const val = (k) => (spec[k] !== undefined && spec[k] !== null && spec[k] !== "" ? spec[k] : "");
   const ph = (k) => PRESETS[s.preset]?.[k] ?? "";
+  const flowOn = !!(p.water?.flow || p.water?.mode === "flow");
+  const kFields = () => (flowOn ? fld("k", "Permeability k", "m/s") + fld("kRatio", "Anisotropy kh / kv", "") : "");
   const fld = (k, l, u, show = true) => (show ? `<div class="f"><span class="lab">${l}</span><span class="num"><input type="number" inputmode="decimal" data-k="${it.k}.${k}" value="${val(k)}" placeholder="${ph(k)}" step="any"><span class="unit">${u}</span></span></div>` : "");
   return `<div class="f wide"><span class="lab">${esc(it.l)}</span><select data-soil="${it.k}">${soilOptions(s.preset)}</select>
-    <div class="soil-sum"><span><b>γ</b> ${s.gamma}/${s.gsat} kN/m³</span>${s.hb ? `<span><b>GSI</b> ${s.GSI}</span><span><b>mi</b> ${s.mi}</span><span><b>σci</b> ${s.sci} MPa</span>${s.D ? `<span><b>D</b> ${s.D}</span>` : ""}` : `<span><b>c'</b> ${s.c} kPa</span><span><b>φ'</b> ${s.phi}°</span>`}${!s.hb && s.clay && s.su > 0 ? `<span><b>su</b> ${s.su}${s.suGrad ? ` + ${s.suGrad}/m` : ""} kPa</span>` : ""}
+    <div class="soil-sum"><span><b>γ</b> ${s.gamma}/${s.gsat} kN/m³</span>${s.hb ? `<span><b>GSI</b> ${s.GSI}</span><span><b>mi</b> ${s.mi}</span><span><b>σci</b> ${s.sci} MPa</span>${s.D ? `<span><b>D</b> ${s.D}</span>` : ""}` : `<span><b>c'</b> ${s.c} kPa</span><span><b>φ'</b> ${s.phi}°</span>`}${flowOn ? `<span><b>k</b> ${s.k.toExponential(0)} m/s</span>` : ""}${!s.hb && s.clay && s.su > 0 ? `<span><b>su</b> ${s.su}${s.suGrad ? ` + ${s.suGrad}/m` : ""} kPa</span>` : ""}
     <button type="button" class="linkish" data-soiledit="${it.k}">${editing ? "Done" : "Use site values"}</button></div>
-    ${editing && s.hb ? `<div class="subgrid">${fld("gamma", "Unit weight above water γ", "kN/m³")}${fld("gsat", "Saturated unit weight γsat", "kN/m³")}${fld("GSI", "Geological Strength Index GSI", "")}${fld("mi", "Intact rock constant mi", "")}${fld("sci", "Intact compressive strength σci", "MPa")}${fld("D", "Disturbance D", "0–1")}<div class="note">Generalised Hoek-Brown (2002). Each slice takes the tangent strength at the normal stress on its base, iterated to convergence. Use D 0.7 to 1 for blasted faces.</div></div>` : ""}
-    ${editing && !s.hb ? `<div class="subgrid">${fld("gamma", "Unit weight above water γ", "kN/m³")}${fld("gsat", "Saturated unit weight γsat", "kN/m³")}${fld("c", "Effective cohesion c'", "kPa")}${fld("phi", "Effective friction angle φ'", "°")}${fld("su", "Undrained strength su (clays)", "kPa", s.clay || it.alwaysSu)}${fld("suGrad", "su increase with depth", "kPa/m", s.clay || it.alwaysSu)}${fld("suMax", "su cap", "kPa", it.alwaysSu)}<div class="note">Blank fields keep the typical value shown. Typical values are a starting point; use site data for design.</div></div>` : ""}</div>`;
+    ${editing && s.hb ? `<div class="subgrid">${fld("gamma", "Unit weight above water γ", "kN/m³")}${fld("gsat", "Saturated unit weight γsat", "kN/m³")}${fld("GSI", "Geological Strength Index GSI", "")}${fld("mi", "Intact rock constant mi", "")}${fld("sci", "Intact compressive strength σci", "MPa")}${fld("D", "Disturbance D", "0–1")}${kFields()}<div class="note">Generalised Hoek-Brown (2002). Each slice takes the tangent strength at the normal stress on its base, iterated to convergence. Use D 0.7 to 1 for blasted faces.</div></div>` : ""}
+    ${editing && !s.hb ? `<div class="subgrid">${fld("gamma", "Unit weight above water γ", "kN/m³")}${fld("gsat", "Saturated unit weight γsat", "kN/m³")}${fld("c", "Effective cohesion c'", "kPa")}${fld("phi", "Effective friction angle φ'", "°")}${fld("su", "Undrained strength su (clays)", "kPa", s.clay || it.alwaysSu)}${fld("suGrad", "su increase with depth", "kPa/m", s.clay || it.alwaysSu)}${fld("suMax", "su cap", "kPa", it.alwaysSu)}${kFields()}<div class="note">Blank fields keep the typical value shown. Typical values are a starting point; use site data for design.</div></div>` : ""}</div>`;
 }
 
 function layersWidget(p) {
@@ -875,6 +882,7 @@ function aboutPanel() {
   <p><b>What Talus does.</b> For each load case it searches thousands of circular slip surfaces (entry, exit and radius), refines the lowest with a simplex search, then solves the critical one exactly by every method. Optionally it frees the circle into a non-circular surface. The analysis is two-dimensional, per metre run; the 3D view extrudes the section so it can be seen.</p>
   <p><b>Slices.</b> The mass above the surface is cut into vertical slices that break at every layer boundary, water line, load edge and crossing, so weights, centroids and pore pressures are exact for the geometry. Weight uses γ above the water line and γsat below; pore pressure is γw times the head above the base; water standing on the ground is a pressure on the surface.</p>
   <p><b>Methods.</b> One general limit equilibrium formulation (Fredlund and Krahn 1977) gives Bishop simplified, Janbu simplified (with Janbu's f0 correction), Spencer (constant interslice inclination) and Morgenstern-Price (half-sine). Ordinary is shown for comparison. The slices are solved one after another exactly for each F and λ, and λ is found where force and moment equilibrium give the same F.</p>
+  <p><b>Flow net.</b> With the flow net on, pore pressures come from steady seepage solved by finite elements (linear triangles on a mesh that follows the ground) through each soil's permeability k and anisotropy kh/kv. The phreatic surface is found as SEEP/W and Slide do: above it the permeability falls to a small residual, ground above the outside water is a seepage face, and the iterations repeat until the heads settle. It reproduces Darcy flow exactly and the Dupuit–Charny discharge of a rectangular dam to within 2% (Verification). After a rapid drawdown the heads stay at the steady flow net, held at most at the ground surface.</p>
   <p><b>Load cases.</b> Cut slopes: long term (drained), short term (undrained clays), seismic. Embankments: end of construction, steady seepage, rapid drawdown, seismic. Revetments: high and low water, drawdown under the wave trough, seismic. Targets follow USACE EM 1110-2-1902 or, with Eurocode 7, the M2 partial factors with an over-design factor of 1.0.</p>
   <p><b>Earthquake.</b> Pseudo-static kh = 0.5·ag·S·ST, kv = ±0.5·kh (EN 1998-5), both kv directions checked; yield acceleration by bisection; permanent displacement by Jibson (2007).</p>
   <p><b>Armour.</b> Rock by Hudson and by Van der Meer (1988), or its shallow-water form (Van Gent et al. 2003) when h &lt; 3Hs, with the larger governing; EN 13383 gradings; toe by Van der Meer (1998); run-up and overtopping by EurOtop (2018). Accropode™ and Accropode™ II by Hudson with CLI's design KD (15 / 11.5 and 16 / 12.3), valid on 4:3 to 3:2 slopes; Accropode is a trademark of CLI, and units must be designed and placed to CLI's guidance.</p>
