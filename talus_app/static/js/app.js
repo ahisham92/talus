@@ -6,6 +6,7 @@ import { METHOD_NAMES } from "../engine/lem.js";
 import { rockArmour, accropode, damageLevels, COEFFS } from "../engine/armour.js";
 import { sectionSVG, esc } from "./section.js";
 import { fosColour } from "./shapes.js";
+import { docx } from "./docx.js";
 
 const T = window.__TALUS || { api: "api", base: "./", static: "static/", openId: null };
 const $ = (s, el = document) => el.querySelector(s);
@@ -780,6 +781,7 @@ function renderAll() {
 // ------------------------------------------------------------------ events on the answer
 
 document.addEventListener("click", (ev) => {
+  if (!ev.target.closest(".menu-wrap")) $("#reportMenu").classList.add("hidden");
   const b = ev.target.closest("button");
   if (!b) return;
   if (b.dataset.case) { state.selected = b.dataset.case; renderCases(false); renderPanel(); renderView(); return; }
@@ -799,7 +801,8 @@ document.addEventListener("click", (ev) => {
   if (b.dataset.verify !== undefined) { startVerify(); return; }
   if (b.dataset.csv !== undefined) { downloadCSV(); return; }
   if (b.id === "btnProjects") { openDrawer(); return; }
-  if (b.id === "btnReport") { printReport(); return; }
+  if (b.id === "btnReport") { $("#reportMenu").classList.toggle("hidden"); return; }
+  if (b.dataset.report) { $("#reportMenu").classList.add("hidden"); b.dataset.report === "word" ? wordReport() : printReport(); return; }
   if (b.dataset.close !== undefined) { $("#drawer").classList.add("hidden"); return; }
   if (b.dataset.new) { newProject(b.dataset.new); return; }
 });
@@ -911,32 +914,137 @@ function reportValue(it, v) {
   return `${v} ${it.u || ""}`.trim();
 }
 
-async function printReport() {
-  const r = state.result;
-  if (!r) return;
-  const p = state.project;
-  let img = "";
-  if (view3d && state.view === "3d") { try { img = `<img src="${view3d.snapshot()}" style="width:100%;max-height:9cm;object-fit:contain">`; } catch (e) { /* no snapshot */ } }
-  const inputs = SPEC[p.type].map((G) => {
-    const rows = G.items.filter((it) => (!it.show || it.show(p)) && it.k && (it.kind || "num") !== "soil").map((it) => `<tr><td>${esc(it.l)}</td><td>${esc(reportValue(it, get(p, it.k)))}</td></tr>`).join("");
-    const soils = G.items.filter((it) => it.kind === "soil" && (!it.show || it.show(p))).map((it) => { const s = soilFrom(get(p, it.k)); return `<tr><td>${esc(it.l)}</td><td>${esc(s.name)}: γ ${s.gamma}/${s.gsat} kN/m³, c' ${s.c} kPa, φ' ${s.phi}°${s.clay && s.su ? `, su ${s.su}${s.suGrad ? ` + ${s.suGrad}/m` : ""} kPa` : ""}</td></tr>`; }).join("");
-    const benches = G.items.some((it) => it.kind === "benches") && bermsOn(p)
-      ? `<tr><td>Benches, from the crest down</td><td>${bermRows(p).map((r, i, R) => `${r.h} m at 1:${r.cot}${i < R.length - 1 ? `, berm ${r.berm} m` : ""}`).join("; ")}</td></tr>` : "";
-    return rows || soils || benches ? `<tr><th colspan="2" style="text-align:left">${esc(G.g)}</th></tr>${soils}${rows}${benches}` : "";
-  }).join("");
-  const cases = r.cases.map((c) => c.error ? "" : `<div style="page-break-inside:avoid"><h2>${esc(c.name)}: F = ${f3(c.F)} (needs ${f2(c.target)}) ${c.pass ? "✓" : "✕"}</h2><p>${esc(c.note)}</p>${sectionSVG(r, c, { width: 900, height: 420, reinforcement: r.geometry.reinforcement, faceDir: r.geometry.faceDir })}
-    <table><tr>${Object.keys(c.results).map((m) => `<th>${esc(METHOD_NAMES[m])}</th>`).join("")}</tr><tr>${Object.values(c.results).map((F) => `<td>${f3(F)}</td>`).join("")}</tr></table>
-    <p>${c.surface.circle ? `Critical circle: centre (${f2(c.surface.circle.xc)}, ${f2(c.surface.circle.yc)}) m, radius ${f2(c.surface.circle.R)} m.` : "Non-circular critical surface."} Sliding mass ${fmt(c.weight, 0)} kN/m.</p></div>`).join("");
+const soilText = (s) => `${s.name}: γ ${s.gamma}/${s.gsat} kN/m³, c' ${s.c} kPa, φ' ${s.phi}°${s.clay && s.su ? `, su ${s.su}${s.suGrad ? ` + ${s.suGrad}/m` : ""}${s.suMax ? ` (max ${s.suMax})` : ""} kPa` : ""}`;
+const ptsText = (v) => parsePoints(v || "").map(([x, y]) => `(${+x.toFixed(2)}, ${+y.toFixed(2)})`).join(" ");
+
+/** The inputs as rows of a table, grouped as on screen. */
+function reportInputs(p) {
+  const out = [];
+  for (const G of SPEC[p.type]) {
+    const rows = [];
+    for (const it of G.items) {
+      if (it.show && !it.show(p)) continue;
+      if (it.kind === "soil") rows.push([it.l, soilText(soilFrom(get(p, it.k)))]);
+      else if (it.kind === "points") rows.push([it.l, ptsText(get(p, it.k))]);
+      else if (it.kind === "layers") (p.layers || []).forEach((L, i) => rows.push([`Layer ${i + 1}${i ? `, top ${ptsText(L.top)}` : ", top is the ground"}`, soilText(soilFrom(L.soil))]));
+      else if (it.kind === "benches") { if (bermsOn(p)) rows.push(["Benches, from the crest down", bermRows(p).map((r, i, R) => `${r.h} m at 1:${r.cot}${i < R.length - 1 ? `, berm ${r.berm} m` : ""}`).join("; ")]); }
+      else if (it.k && it.kind !== "html") rows.push([it.l, reportValue(it, get(p, it.k))]);
+    }
+    if (rows.length) out.push({ group: G.g }, ...rows);
+  }
+  return out;
+}
+
+const surfaceText = (c) => c.surface.circle
+  ? `Critical circle: centre (${f2(c.surface.circle.xc)}, ${f2(c.surface.circle.yc)}) m, radius ${f2(c.surface.circle.R)} m.`
+  : `${c.surface.kind === "block" ? "Critical block along a weak layer" : "Non-circular critical surface"}: ${c.surface.slip.map(([x, y]) => `(${f2(x)}, ${f2(y)})`).join(" ")}.`;
+
+/** The report as blocks, shared by the printed (PDF) and the Word versions. */
+function reportBlocks(snapshot) {
+  const r = state.result, p = state.project;
+  const B = [];
+  const geo = { reinforcement: r.geometry.reinforcement, faceDir: r.geometry.faceDir };
+  B.push({ t: "title", text: `${p.name} · slope stability` });
+  B.push({ t: "note", text: `Talus ${T.version || ""} · ${new Date().toLocaleString()} · ${BASES[p.design.basis].name} · governing method ${METHOD_NAMES[p.design.method]} · ${KINDS.find((k) => k[0] === p.type)?.[1] || p.type}` });
+  B.push({ t: "h1", text: "Result" });
+  B.push({ t: "p", text: r.pass ? "**All load cases meet their targets.**" : `**Not enough: ${r.worst.name} F = ${f3(r.worst.F)} against ${f2(r.worst.target)}.**` });
+  B.push({ t: "table", head: ["Load case", "F", "Target", "F / target", ""], widths: [0.44, 0.14, 0.14, 0.14, 0.14],
+    rows: r.cases.map((c) => [c.name, c.error ? "–" : f3(c.F), f2(c.target), c.error ? "–" : f2(c.F / c.target), c.error ? "error" : c.pass ? "OK" : "Not OK"]) });
+  if (snapshot) B.push({ t: "img", src: snapshot, w: 1600, h: 900, widthCm: 15 }, { t: "caption", text: "3D view of the governing case (the section extruded per metre run)." });
+  B.push({ t: "h1", text: "Inputs" });
+  B.push({ t: "table", widths: [0.38, 0.62], rows: reportInputs(p) });
   const a = r.extras?.armour;
-  const armour = a ? `<h2>Armour</h2><p>${a.unit.kind === "rock" ? `Rock ${a.unit.grading?.name || "(above EN 13383 gradings)"}: M50 ≥ ${fmt(a.unit.M50 / 1000, 2)} t, Dn50 ${f2(a.unit.Dn50)} m (Hudson ${f2(a.unit.hudson.Dn50)} m, ${esc(a.unit.vdm.formula)} ${f2(a.unit.vdm.Dn50)} m). Two layers, ${f2(a.unit.thickness)} m. Underlayer ${a.unit.underlayer.grading?.name || "–"}, ${f2(a.unit.underlayer.thickness)} m.` : `${armourName(a.unit.kind)} ${f2(a.unit.size)} m³ (${f1(a.unit.mass)} t), height ${f2(a.unit.height)} m, single layer ${f2(a.unit.thickness)} m, ${f1(a.unit.units100)} units per 100 m², KD ${a.unit.KD}.`} Toe rock ${a.toe.grading?.name || "–"} (M50 ≥ ${fmt(a.toe.M50 / 1000, 2)} t). Run-up Ru2% ${f2(a.runup.Ru2)} m; overtopping ${f2(a.overtopping.q)} l/s/m.</p>` : "";
+  if (a) {
+    B.push({ t: "h1", text: "Armour" });
+    B.push({ t: "p", text: a.unit.kind === "rock"
+      ? `Rock ${a.unit.grading?.name || "(above EN 13383 gradings)"}: M50 ≥ ${fmt(a.unit.M50 / 1000, 2)} t, Dn50 ${f2(a.unit.Dn50)} m (Hudson ${f2(a.unit.hudson.Dn50)} m, ${a.unit.vdm.formula} ${f2(a.unit.vdm.Dn50)} m). Two layers, ${f2(a.unit.thickness)} m. Underlayer ${a.unit.underlayer.grading?.name || "–"}, ${f2(a.unit.underlayer.thickness)} m.`
+      : `${armourName(a.unit.kind)} ${f2(a.unit.size)} m³ (${f1(a.unit.mass)} t), height ${f2(a.unit.height)} m, single layer ${f2(a.unit.thickness)} m, ${f1(a.unit.units100)} units per 100 m², KD ${a.unit.KD}.` });
+    B.push({ t: "p", text: `Toe rock ${a.toe.grading?.name || "–"} (M50 ≥ ${fmt(a.toe.M50 / 1000, 2)} t). Run-up Ru2% ${f2(a.runup.Ru2)} m; overtopping ${f2(a.overtopping.q)} l/s/m.` });
+  }
   const sz = state.seismic;
-  const seismic = sz ? `<h2>Earthquake</h2><p>Yield acceleration ky = ${f3(sz.ky)} g; peak surface acceleration ${f3(sz.amax)} g; Newmark displacement ${sz.newmark ? f1(sz.newmark.D) + " cm" : "–"} (Jibson 2007).</p>` : "";
-  $("#report").innerHTML = `<div class="wrap"><h1>${esc(p.name)} · slope stability</h1><p>Talus ${esc(T.version || "")} · ${new Date().toLocaleString()} · ${esc(BASES[p.design.basis].name)} · governing method ${esc(METHOD_NAMES[p.design.method])}</p>
-    <h2>Result</h2><p><b>${r.pass ? "All load cases meet their targets." : `Not enough: ${esc(r.worst.name)} F = ${f3(r.worst.F)} against ${f2(r.worst.target)}.`}</b></p>
-    <table><tr><th>Load case</th><th>F</th><th>Target</th><th></th></tr>${r.cases.map((c) => `<tr><td>${esc(c.name)}</td><td>${f3(c.F)}</td><td>${f2(c.target)}</td><td>${c.pass ? "✓" : "✕"}</td></tr>`).join("")}</table>
-    ${img}<h2>Inputs</h2><table>${inputs}</table>${armour}${seismic}<div class="page"></div>${cases}
-    <h2>Method</h2>${aboutPanel()}</div>`;
+  if (sz) {
+    B.push({ t: "h1", text: "Earthquake" });
+    B.push({ t: "p", text: `Yield acceleration ky = ${f3(sz.ky)} g; peak surface acceleration ${f3(sz.amax)} g; Newmark displacement ${sz.newmark ? f1(sz.newmark.D) + " cm" : "–"} (Jibson 2007).` });
+  }
+  r.cases.forEach((c, i) => {
+    if (c.error) return;
+    B.push({ t: "break" });
+    B.push({ t: "h1", text: `${i + 1}. ${c.name}: F = ${f3(c.F)} (needs ${f2(c.target)}) ${c.pass ? "OK" : "Not OK"}` });
+    if (c.note) B.push({ t: "p", text: c.note });
+    B.push({ t: "img", svg: sectionSVG(r, c, { width: 1000, height: 460, ...geo }), w: 1000, h: 460 });
+    B.push({ t: "caption", text: `Section with the critical surface, ${METHOD_NAMES[c.method]}.` });
+    B.push({ t: "table", head: Object.keys(c.results).map((m) => METHOD_NAMES[m]), rows: [Object.values(c.results).map((F) => f3(F))] });
+    B.push({ t: "p", text: `${surfaceText(c)} Sliding mass ${fmt(c.weight, 0)} kN/m.` });
+    if (c.slices && c.name === r.worst.name) {
+      B.push({ t: "h2", text: `Slices on the governing surface (${c.slices.length}, ${METHOD_NAMES[c.method]})` });
+      B.push({ t: "table", small: true, head: ["#", "x left", "x right", "α °", "W kN", "c kPa", "φ °", "u kPa", "N' kN", "S kN", "E kN", "X kN"],
+        rows: c.slices.map((s, k) => [k + 1, f2(s.x0), f2(s.x1), f1(s.alpha), f1(s.W), f1(s.c), f1(s.phi), f1(s.u), f1(s.Neff), f1(s.S), f1(s.Er), f1(s.Xr)]) });
+      B.push({ t: "note", text: "E and X are the interslice normal and shear forces on the downslope side of each slice (Fredlund and Krahn sign). All forces per metre run." });
+    }
+  });
+  B.push({ t: "break" }, { t: "h1", text: "Method" });
+  for (const m of aboutPanel().matchAll(/<p>([\s\S]*?)<\/p>/g)) B.push({ t: "p", text: m[1].replace(/<b>(.*?)<\/b>/g, "**$1**").replace(/<[^>]+>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&") });
+  return B;
+}
+
+const md = (t) => esc(t).replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+
+function blocksHTML(B) {
+  return B.map((b) => {
+    if (b.t === "title") return `<h1>${esc(b.text)}</h1>`;
+    if (b.t === "h1") return `<h2>${esc(b.text)}</h2>`;
+    if (b.t === "h2") return `<h3>${esc(b.text)}</h3>`;
+    if (b.t === "note") return `<p class="rnote">${md(b.text)}</p>`;
+    if (b.t === "caption") return `<p class="rcap">${md(b.text)}</p>`;
+    if (b.t === "break") return `<div class="page"></div>`;
+    if (b.t === "img") return b.svg || `<img src="${b.src}" alt="" style="width:100%;max-height:9cm;object-fit:contain">`;
+    if (b.t === "table") return `<table class="${b.small ? "rsmall" : ""}">${b.head ? `<tr>${b.head.map((h) => `<th>${esc(h)}</th>`).join("")}</tr>` : ""}${b.rows.map((r) => r.group ? `<tr><th colspan="9" style="text-align:left">${esc(r.group)}</th></tr>` : `<tr>${r.map((v) => `<td>${md(v)}</td>`).join("")}</tr>`).join("")}</table>`;
+    return `<p>${md(b.text)}</p>`;
+  }).join("\n");
+}
+
+function snapshot3d() {
+  if (!view3d || state.view !== "3d") return "";
+  try { return view3d.snapshot(); } catch (e) { return ""; }
+}
+
+function printReport() {
+  if (!state.result) return;
+  $("#report").innerHTML = `<div class="wrap">${blocksHTML(reportBlocks(snapshot3d()))}</div>`;
   setTimeout(() => window.print(), 50);
+}
+
+/** An SVG or a data URL drawn to a PNG, at twice its size for print. */
+function toPNG(b) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const done = () => {
+      const k = b.svg ? 2 : 1, w = (b.svg ? b.w : img.naturalWidth) * k, h = (b.svg ? b.h : img.naturalHeight) * k;
+      const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+      const g = cv.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, w, h); g.drawImage(img, 0, 0, w, h);
+      cv.toBlob(async (blob) => resolve(blob ? { png: new Uint8Array(await blob.arrayBuffer()), w, h } : null), "image/png");
+    };
+    img.onload = done; img.onerror = () => resolve(null);
+    if (b.svg) {
+      // the drawing uses the page's colour tokens; a picture on its own needs them spelt out
+      const svg = b.svg.replace(/var\(--grid\)/g, "#e1e0d9").replace(/var\(--muted\)/g, "#898781").replace(/var\(--surface\)/g, "#ffffff")
+        .replace("<svg ", `<svg width="${b.w}" height="${b.h}" font-family="Calibri, Arial, sans-serif" `);
+      img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+    } else img.src = b.src;
+  });
+}
+
+async function wordReport() {
+  if (!state.result) return;
+  toast("Building the Word report…");
+  const B = reportBlocks(snapshot3d());
+  for (const b of B) if (b.t === "img") Object.assign(b, (await toPNG(b)) || { png: null });
+  const blob = docx(B, { title: `${state.project.name} · slope stability`, footer: `${state.project.name} · Talus ${T.version || ""}` });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${(state.project.name || "talus").replace(/[^\w\- ]+/g, "").trim() || "talus"}.docx`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
 
 // ------------------------------------------------------------------ start
@@ -968,5 +1076,6 @@ async function start() {
 start();
 
 document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape") $("#reportMenu").classList.add("hidden");
   if (ev.key === "Escape" && !$("#drawer").classList.contains("hidden")) $("#drawer").classList.add("hidden");
 });
