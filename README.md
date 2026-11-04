@@ -1,6 +1,6 @@
 # Talus: slope stability
 
-Talus checks cut slopes, embankments and revetments. Pick the kind of slope and change a number: the answer, the 3D view and the cross-section update while you type, on a desktop or a phone. It finds the critical slip surface for every load case (long term, short term, rapid drawdown and earthquake), shows how the slope would fail, and finds the steepest slope that still meets every target.
+Talus checks cut slopes (with or without benches and berms), embankments, revetments and any drawn section: paste the ground, each layer's top line and the water line as x, y points. Pick the kind of slope and change a number: the answer, the 3D view and the cross-section update while you type, on a desktop or a phone. It finds the critical slip surface for every load case (long term, short term, rapid drawdown and earthquake), shows how the slope would fail, and finds the steepest slope that still meets every target.
 
 It runs inside the Project_Management site at `/talus`. Pull the site and it is there.
 
