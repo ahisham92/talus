@@ -232,3 +232,31 @@ test("flow net: embankment steady seepage and drawdown solve", async () => {
   assert.ok(Math.abs(b.geometry.piezo[0][1] - 4) < 1e-6);
   assert.ok(Math.abs(b.geometry.piezo[b.geometry.piezo.length - 1][1]) < 1e-6);
 });
+
+test("DXF: layers become the ground, soil tops, water and base of a section", async () => {
+  const { readDXF, sectionFromDXF, guessRole, dxfLayers } = await import("../talus_app/static/engine/dxf.js");
+  const ent = (t, codes) => `  0\r\n${t}\r\n` + codes.map(([c, v]) => `${String(c).padStart(3)}\r\n${v}`).join("\r\n") + "\r\n";
+  let s = "  0\r\nSECTION\r\n  2\r\nHEADER\r\n  9\r\n$ACADVER\r\n  1\r\nAC1009\r\n  0\r\nENDSEC\r\n  0\r\nSECTION\r\n  2\r\nENTITIES\r\n";
+  // the ground drawn as two separate lines and a polyline, out of order
+  s += ent("LINE", [[8, "EGL"], [10, 40], [20, 0], [11, 70], [21, 0]]);
+  s += ent("LWPOLYLINE", [[8, "EGL"], [90, 3], [70, 0], [10, 40], [20, 0], [10, 20], [20, 10], [10, 0], [20, 10]]);
+  // a clay region drawn closed: its top is at -2
+  s += ent("LWPOLYLINE", [[8, "CLAY"], [90, 4], [70, 1], [10, 0], [20, -2], [10, 70], [20, -2], [10, 70], [20, -12], [10, 0], [20, -12]]);
+  s += ent("POLYLINE", [[8, "WL"], [66, 1]]) + ent("VERTEX", [[8, "WL"], [10, 0], [20, 6]]) + ent("VERTEX", [[8, "WL"], [10, 40], [20, 0]]) + ent("VERTEX", [[8, "WL"], [10, 70], [20, 0]]) + ent("SEQEND", [[8, "WL"]]);
+  s += ent("TEXT", [[8, "TEXT"], [10, 5], [20, 5], [1, "Section A"]]);
+  s += "  0\r\nENDSEC\r\n  0\r\nEOF\r\n";
+  const segs = readDXF(s);
+  const roles = dxfLayers(segs).map((L) => ({ name: L.name, role: guessRole(L.name), preset: "stiffClay" }));
+  assert.deepEqual(Object.fromEntries(roles.map((r) => [r.name, r.role])), { EGL: "ground", CLAY: "layer", WL: "water" });
+  const r = sectionFromDXF(segs, roles, { top: "sand" });
+  assert.equal(r.ground, "0, 10\n20, 10\n40, 0\n70, 0");
+  assert.equal(r.layers.length, 2);
+  assert.equal(r.layers[1].top, "0, -2\n70, -2");
+  assert.equal(r.base, -12);
+  assert.equal(r.water.line, "0, 6\n40, 0\n70, 0");
+  // and it analyses
+  const { buildCases } = await import("../talus_app/static/engine/project.js");
+  const { analyseCase } = await import("../talus_app/static/engine/analyse.js");
+  const b = buildCases({ type: "section", ground: r.ground, base: r.base, layers: r.layers, water: r.water, seismic: { on: false } });
+  assert.ok(analyseCase(b.cases[0], { method: "mp", slices: 30 }).F > 0.5);
+});

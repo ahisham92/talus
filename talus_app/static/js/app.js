@@ -8,6 +8,7 @@ import { sectionSVG, esc } from "./section.js";
 import { fosColour } from "./shapes.js";
 import { docx } from "./docx.js";
 import { COV, COV_LABEL } from "../engine/prob.js";
+import { readDXF, dxfLayers, guessRole, upperOutline, sectionFromDXF } from "../engine/dxf.js";
 
 const T = window.__TALUS || { api: "api", base: "./", static: "static/", openId: null };
 const $ = (s, el = document) => el.querySelector(s);
@@ -221,6 +222,7 @@ const SPEC = {
   ],
   section: [
     { g: "Section", icon: "shape", open: true, sum: (p) => `${parsePoints(p.ground).length} ground points`, items: [
+      { kind: "dxf" },
       { kind: "points", k: "ground", l: "Ground surface", sub: "x, y per line, left to right. Paste from Excel or CAD." },
       { k: "base", l: "Hard base level", sub: "no slip goes below it", u: "m", step: 0.5 },
     ] },
@@ -328,7 +330,71 @@ function item(it, p) {
     return `<div class="f wide">${lab}<textarea class="pts" data-k="${it.k}" rows="${Math.min(10, Math.max(3, String(v).split("\n").length + 1))}" spellcheck="false" aria-label="${esc(it.l)}">${esc(v)}</textarea><span class="note" data-ptcount="${it.k}">${n} points</span></div>`;
   }
   if (kind === "layers") return layersWidget(p);
+  if (kind === "dxf") return dxfWidget();
   return "";
+}
+
+// ------------------------------------------------------------------ DXF import
+
+let dxf = null;   // { file, segs, layers: [{ name, role, preset, ... }], scale, top, error }
+const DXF_ROLES = [["ground", "Ground surface"], ["layer", "Top of a soil"], ["water", "Water line"], ["ignore", "Ignore"]];
+function dxfWidget() {
+  if (!dxf) return `<div class="f wide dxf"><label class="btn btn-ghost btn-sm filebtn">Import a DXF drawing<input type="file" accept=".dxf,application/dxf,image/vnd.dxf" data-dxf hidden></label>
+    <span class="note">From AutoCAD, Civil 3D, Slide or SLOPE/W (ASCII DXF). Each CAD layer becomes the ground, the top of a soil or the water line.</span></div>`;
+  const sc = dxf.scale;
+  const rows = dxf.layers.map((L, i) => `<div class="dxfrow"><div><b>${esc(L.name)}</b><span class="note"> ${L.segments} lines · x ${fx1(L.x0 * sc)} to ${fx1(L.x1 * sc)}, y ${fx1(L.y0 * sc)} to ${fx1(L.y1 * sc)}</span></div>
+    <select data-dxfrole="${i}" aria-label="What ${esc(L.name)} is">${DXF_ROLES.map(([v, n]) => `<option value="${v}" ${L.role === v ? "selected" : ""}>${n}</option>`).join("")}</select>
+    ${L.role === "layer" ? `<select data-dxfsoil="${i}" aria-label="Soil below ${esc(L.name)}">${soilOptions(L.preset)}</select>` : ""}</div>`).join("");
+  return `<div class="f wide dxf glass"><div class="row between"><b>${esc(dxf.file)}</b><button type="button" class="linkish" data-dxfcancel>Cancel</button></div>
+    <div class="seg" role="group" aria-label="Drawing units">${[[1, "metres"], [0.001, "millimetres"]].map(([v, n]) => `<button type="button" data-dxfscale="${v}" aria-pressed="${sc === v}">${n}</button>`).join("")}</div>
+    ${dxfPreview()}
+    <div class="dxfrow"><div>Soil under the ground</div><select data-dxftop aria-label="Soil under the ground">${soilOptions(dxf.top)}</select></div>
+    ${rows}
+    ${dxf.error ? `<div class="pill warn">${esc(dxf.error)}</div>` : ""}
+    <button type="button" class="btn btn-sm" data-dxfapply>Use this section</button>
+    <span class="note">Soil tops are ordered from the top down. Each layer is read as the upper edge of its lines, so a closed soil region gives its top. A flat line at the very bottom becomes the hard base.</span></div>`;
+}
+const fx1 = (v) => (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(1));
+function dxfPreview() {
+  const sc = dxf.scale, W = 320, H = 150;
+  const all = dxf.layers.filter((L) => L.role !== "ignore");
+  if (!all.length) return "";
+  const x0 = Math.min(...all.map((L) => L.x0)) * sc, x1 = Math.max(...all.map((L) => L.x1)) * sc;
+  const y0 = Math.min(...all.map((L) => L.y0)) * sc, y1 = Math.max(...all.map((L) => L.y1)) * sc;
+  const s = Math.min((W - 12) / ((x1 - x0) || 1), (H - 12) / ((y1 - y0) || 1));
+  const X = (x) => 6 + (x - x0) * s, Y = (y) => H - 6 - (y - y0) * s;
+  const col = { ground: "#5b4a2e", layer: "#a07c4a", water: "#2a78d6" };
+  const paths = all.map((L) => {
+    const pts = upperOutline(dxf.segs[L.name], sc);
+    return pts.length > 1 ? `<path d="${pts.map((p, k) => `${k ? "L" : "M"}${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join("")}" fill="none" stroke="${col[L.role]}" stroke-width="${L.role === "ground" ? 2 : 1.2}" ${L.role === "water" ? 'stroke-dasharray="5 3"' : ""}/>` : "";
+  }).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" class="dxfprev" role="img" aria-label="Preview of the imported section">${paths}</svg>`;
+}
+async function dxfLoad(file) {
+  try {
+    const text = await file.text();
+    const segs = readDXF(text);
+    const layers = dxfLayers(segs).map((L) => ({ ...L, role: guessRole(L.name), preset: "stiffClay" }));
+    if (!layers.length) { toast("No lines found in that drawing (is it an ASCII DXF?)", true); return; }
+    // nothing named like the ground: take the layer that spans the widest
+    if (!layers.some((L) => L.role === "ground")) layers[0].role = "ground";
+    const span = Math.max(...layers.map((L) => L.x1 - L.x0));
+    dxf = { file: file.name, segs, layers, scale: span > 5000 ? 0.001 : 1, top: "sand" };
+  } catch (e) { toast("Could not read that drawing: " + e.message, true); return; }
+  renderInputs();
+}
+function dxfApply() {
+  const r = sectionFromDXF(dxf.segs, dxf.layers, { scale: dxf.scale, top: dxf.top });
+  if (r.error) { dxf.error = r.error; renderInputs(); return; }
+  const p = state.project;
+  p.ground = r.ground; p.base = r.base; p.layers = r.layers;
+  if (r.water) { p.water.mode = p.water.mode === "flow" ? "flow" : "line"; p.water.line = r.water.line; }
+  const [a, b] = r.extent;
+  if (p.load) { p.load.x1 = Math.max(a, Math.min(b, +p.load.x1 || a)); p.load.x2 = Math.max(a, Math.min(b, +p.load.x2 || a)); }
+  if (p.piles) p.piles.x = (a + b) / 2;
+  toast(`Section imported from ${dxf.file}`);
+  dxf = null;
+  changed(true);
 }
 
 function soilWidget(it, p) {
@@ -384,6 +450,10 @@ const inputsEl = () => $("#inputs");
 function onInput(ev) {
   const el = ev.target;
   const p = state.project;
+  if (el.dataset.dxf !== undefined) { if (ev.type === "change" && el.files?.[0]) dxfLoad(el.files[0]); return; }
+  if (el.dataset.dxfrole !== undefined) { dxf.layers[+el.dataset.dxfrole].role = el.value; dxf.error = null; renderInputs(); return; }
+  if (el.dataset.dxfsoil !== undefined) { dxf.layers[+el.dataset.dxfsoil].preset = el.value; return; }
+  if (el.dataset.dxftop !== undefined) { dxf.top = el.value; return; }
   if (el.dataset.k) {
     let v;
     if (el.type === "checkbox") v = el.checked;
@@ -427,6 +497,9 @@ function onClick(ev) {
     changed(true); return;
   }
   if (b.dataset.layerDel !== undefined) { p.layers.splice(+b.dataset.layerDel, 1); changed(true); return; }
+  if (b.dataset.dxfcancel !== undefined) { dxf = null; renderInputs(); return; }
+  if (b.dataset.dxfscale) { dxf.scale = +b.dataset.dxfscale; renderInputs(); return; }
+  if (b.dataset.dxfapply !== undefined) { dxfApply(); return; }
   if (b.dataset.copyGround !== undefined) { p.water.line = p.ground; changed(true); return; }
   if (b.dataset.benchAdd !== undefined) {
     const rows = bermRows(p), last = rows[rows.length - 1] || { h: 3, cot: 2 };
