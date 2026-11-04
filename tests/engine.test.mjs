@@ -155,3 +155,16 @@ test("block search: a weak seam below the toe governs, both ways round", () => {
   assert.ok(block.F < 1.31 && block.F > 1.2 && block.F < circle.F - 0.1, `block ${block.F}, circle ${circle.F}`);
   assert.ok(Math.abs(flipped.F - block.F) < 0.02, `mirrored ${flipped.F} vs ${block.F}`);
 });
+
+test("Word report: a valid zip with the document, styles and images", async () => {
+  const { docx, crc32 } = await import("../talus_app/static/js/docx.js");
+  assert.equal(crc32(new TextEncoder().encode("123456789")), 0xcbf43926);
+  const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+  const blob = docx([{ t: "title", text: "T & <b>" }, { t: "p", text: "**F** = 1.50" }, { t: "table", head: ["a", "b"], rows: [{ group: "G" }, [1, "x"]] }, { t: "img", png, w: 10, h: 5 }, { t: "break" }]);
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const text = new TextDecoder("latin1").decode(bytes);
+  assert.equal(text.slice(0, 4), "PK\u0003\u0004");
+  for (const part of ["[Content_Types].xml", "word/document.xml", "word/styles.xml", "word/media/image1.png", "word/_rels/document.xml.rels"]) assert.ok(text.includes(part), part);
+  assert.ok(text.includes("T &amp; &lt;b&gt;") && text.includes("<w:b/>"));
+  assert.ok(text.includes("PK\u0005\u0006"));
+});
