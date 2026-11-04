@@ -13,6 +13,7 @@ import { newmark } from "./analyse.js";
 import { hoekBrown, hbTangent, hbEquivalent } from "./materials.js";
 import { probabilistic, normCdf } from "./prob.js";
 import { seepage } from "./seep.js";
+import { stagedStrength } from "./drawdown.js";
 
 const D = Math.PI / 180;
 
@@ -292,6 +293,31 @@ export const CHECKS = [
       const r2 = seepage({ ground: [[0, 12], [30, 12]], bottom: 0, layers: [{ top: [[0, 12], [30, 12]], k }], left: 10, right: 3 }, { nx: 60, ny: 30 }).q;
       return { expected: k * (h1 * h1 - h2 * h2) / (2 * L), rows: [["Talus q, 40 × 30 mesh", dam(40, 30, 12)]], tol: 0.02,
         also: [{ label: "L = 30 m, h1 = 10 m, h2 = 3 m", value: r2, expected: k * (100 - 9) / 60, tol: 0.02 }] };
+    },
+  },
+  {
+    id: "drawdown-envelopes", group: "Drawdown",
+    title: "Three-stage drawdown strengths at Kc = 1, Kc = Kf and between (Duncan, Wright and Wong 1990)",
+    source: "Kc = 1: the Mohr circle with σ3 = σ'fc tangent to the R envelope, found here numerically; Kc = Kf: c' + σ'fc tan φ'; between: linear in Kc. c' 10, φ' 30°, cR 20, φR 15°, σ'fc 100 kPa",
+    run() {
+      const env = { c: 10, phi: 30, cR: 20, phiR: 15 }, s = 100;
+      // Kc = 1 by bisection on the circle's radius: tangent when its distance to the R line equals r
+      const tr = Math.tan(15 * D);
+      let lo = 0, hi = 1e4;
+      for (let k = 0; k < 200; k++) { const r = (lo + hi) / 2, p = s + r; const dist = (20 + p * tr) * Math.cos(15 * D); if (dist > r) lo = r; else hi = r; }
+      const r = (lo + hi) / 2, t1 = r * Math.cos(15 * D);
+      const iso = stagedStrength(s, 0, env);
+      const tKf = 10 + s * Math.tan(30 * D);
+      const onEnv = stagedStrength(s, tKf * 0.999999999, env);
+      // halfway in Kc
+      const Kf = iso.Kf, Kmid = (1 + Kf) / 2;
+      const sp = Math.sin(30 * D), cp = Math.cos(30 * D);
+      // the shear on the failure plane that gives Kc = Kmid at σ'fc = s
+      const t = s * (Kmid - 1) / ((1 + sp) / cp + Kmid * (1 - sp) / cp);
+      const mid = stagedStrength(s, t, env);
+      return { expected: t1, rows: [["Talus τff at Kc = 1 (kPa)", iso.tau]], tol: 1e-9,
+        also: [{ label: "Talus τff at Kc = Kf (kPa)", value: onEnv.tau, expected: tKf, tol: 1e-6 },
+          { label: "Talus τff halfway in Kc (kPa)", value: mid.tau, expected: (t1 + tKf) / 2, tol: 1e-9 }] };
     },
   },
   {

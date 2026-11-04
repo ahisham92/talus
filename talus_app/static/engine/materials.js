@@ -31,6 +31,10 @@ export const PRESET_KEYS = ["softClay", "firmClay", "stiffClay", "silt", "looseS
 export function asMaterial(soil, undrained) {
   const m = material(soil, undrained);
   m.k = soil.k ?? 1e-6; m.kRatio = soil.kRatio || 1;
+  // for the staged drawdown: the R envelope and whether the soil drains freely
+  if (soil.cR !== undefined) m.cR = soil.cR;
+  if (soil.phiR !== undefined) m.phiR = soil.phiR;
+  if (soil.drains !== undefined) m.drains = soil.drains;
   return m;
 }
 function material(soil, undrained) {
@@ -45,13 +49,15 @@ function material(soil, undrained) {
 export function soilFrom(spec) {
   const base = PRESETS[spec?.preset] || PRESETS.sand;
   const out = { kRatio: 1, ...base, preset: spec?.preset || "sand" };
-  for (const k of ["gamma", "gsat", "c", "phi", "su", "suGrad", "suMax", "GSI", "mi", "sci", "D", "k", "kRatio"]) {
+  for (const k of ["gamma", "gsat", "c", "phi", "su", "suGrad", "suMax", "GSI", "mi", "sci", "D", "k", "kRatio", "cR", "phiR"]) {
     const v = spec?.[k];
     if (v !== undefined && v !== null && v !== "" && Number.isFinite(+v)) out[k] = +v;
   }
   // an undrained strength typed in means the layer is checked undrained in the short term
   if (spec?.su !== undefined && spec.su !== null && spec.su !== "" && +spec.su > 0) out.clay = true;
   if (spec?.clay !== undefined) out.clay = !!spec.clay;
+  if (spec?.drains === true || spec?.drains === "yes") out.drains = true;
+  else if (spec?.drains === false || spec?.drains === "no") out.drains = false;
   if (spec?.name) out.name = String(spec.name).slice(0, 40);
   return out;
 }
