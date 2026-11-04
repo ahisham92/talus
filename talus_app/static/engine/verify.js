@@ -14,6 +14,7 @@ import { hoekBrown, hbTangent, hbEquivalent } from "./materials.js";
 import { probabilistic, normCdf } from "./prob.js";
 import { seepage } from "./seep.js";
 import { stagedStrength } from "./drawdown.js";
+import { strengthReduction } from "./fem.js";
 
 const D = Math.PI / 180;
 
@@ -318,6 +319,26 @@ export const CHECKS = [
       return { expected: t1, rows: [["Talus τff at Kc = 1 (kPa)", iso.tau]], tol: 1e-9,
         also: [{ label: "Talus τff at Kc = Kf (kPa)", value: onEnv.tau, expected: tKf, tol: 1e-6 },
           { label: "Talus τff halfway in Kc (kPa)", value: mid.tau, expected: (t1 + tKf) / 2, tol: 1e-9 }] };
+    },
+  },
+  {
+    id: "fem-undrained", group: "Finite elements",
+    title: "Strength reduction: undrained 2:1 slope on a foundation, Griffiths and Lane (1999) example 3",
+    source: "H 10 m, su/γH = 0.25, foundation 10 m deep (D = 2); Griffiths and Lane find F = 1.45 by finite elements (Taylor's chart 1.47)",
+    run() {
+      const model = { ground: [[-30, 0], [0, 0], [20, 10], [45, 10]], bottom: -10, layers: [{ mat: { name: "clay", gamma: 20, gsat: 20, su: 50, kind: "undrained" } }], face: { toe: [0, 0], crest: [20, 10] } };
+      const r = strengthReduction(model, { nx: 20, ny: 8, guess: 1.45, precision: 0.01 });
+      return { expected: 1.45, rows: [["Talus F (finite elements, 20 × 8 quads)", r.F]], tol: 0.02 };
+    },
+  },
+  {
+    id: "fem-drained", group: "Finite elements",
+    title: "Strength reduction: c'-φ' 2:1 slope, Griffiths and Lane (1999) example 1",
+    source: "H 10 m, c'/γH = 0.05, φ' 20°, no foundation (D = 1); Bishop and Morgenstern's charts give 1.38, Griffiths and Lane's finite elements about 1.4",
+    run() {
+      const model = { ground: [[0, 0], [20, 10], [35, 10]], bottom: 0, layers: [{ mat: { name: "soil", gamma: 20, gsat: 20, c: 10, phi: 20, kind: "drained" } }], face: { toe: [0, 0], crest: [20, 10] } };
+      const r = strengthReduction(model, { nx: 20, ny: 8, guess: 1.4, precision: 0.01 });
+      return { expected: 1.38, rows: [["Talus F (finite elements, 20 × 8 quads)", r.F]], tol: 0.05 };
     },
   },
   {

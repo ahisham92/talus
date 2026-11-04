@@ -96,7 +96,7 @@ export function prepare(model) {
 }
 
 /** Strength of a material at a point, with partial factors applied. */
-function strength(P, mat, depthInLayer) {
+export function strength(P, mat, depthInLayer) {
   if (mat.kind === "hb") return { c: 0, tanphi: 0 }; // set per slice from its normal stress
   if (mat.kind === "undrained") {
     let su = mat.su + (mat.suGrad || 0) * Math.max(0, depthInLayer);
