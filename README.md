@@ -10,12 +10,13 @@ It runs inside the Project_Management site at `/talus`. Pull the site and it is 
 |---|---|
 | **Methods** | Morgenstern-Price (half-sine), Spencer, Bishop simplified, Janbu simplified and corrected, and Ordinary, all solved on the same surface. They come from one General Limit Equilibrium formulation (Fredlund & Krahn 1977), solved exactly slice by slice. |
 | **Search** | Thousands of circles are tried over a grid of entry, exit and radius. The best are refined with a simplex search and the critical one is solved by every method. Non-circular surfaces can be optimised as an option. |
-| **Loads** | Self-weight above and below the water table. Piezometric line or rᵤ, with ponded water as a surface pressure. Strip surcharge and line loads. Tension crack with or without water. Soil nails and anchors. Pseudo-static earthquake. |
+| **Loads** | Self-weight above and below the water table. Piezometric line, flow net or rᵤ, with ponded water as a surface pressure. A crest surcharge plus any number of strip loads and line loads (vertical and horizontal, permanent or variable). Tension crack with or without water. Soil nails, anchors, geogrids and pile rows. Pseudo-static earthquake. |
 | **Earthquake** | EN 1998-5: kh = 0.5·ag·S·ST and kv = ±0.5·kh, with both signs checked. Yield acceleration ky. Newmark displacement by Jibson (2007). |
+| **Optimise** | Solves for one input at a time: the steepest slope, the highest slope, the largest surcharge, the groundwater lowering, the shortest or weakest nails, the fewest geogrids, the smallest pile capacity or widest spacing, or the strongest earthquake that still meets every target in every load case. |
 | **Design basis** | Global factors of safety (USACE EM 1110-2-1902: 1.5 / 1.3 / 1.2 / 1.1), or Eurocode 7 DA1-C2 (M2 factors γc' = γφ' = 1.25, γcu = 1.4, variable loads × 1.3, target 1.0). |
 | **Revetments** | Rock armour by Hudson and by Van der Meer (1988), or by Van Gent et al. (2003) in shallow water, whichever governs. EN 13383 gradings and underlayer. Toe by Van der Meer (1998). Run-up and overtopping by EurOtop (2018). Accropode™ and Accropode™ II units with CLI's design KD and the 4:3 to 3:2 slope range. The armour, underlayer and core are part of the global stability model. |
 
-All calculations run in the browser (`talus_app/static/engine`, plain ES modules, with no build step). The same files are tested in Node. The Flask server only serves the page and keeps each person's projects, with version history.
+All calculations run in the browser (`talus_app/static/engine`, plain ES modules, with no build step). The same files are tested in Node. The Flask server only serves the page and keeps each person's projects, with version history (Projects, History). Undo and redo work across every input (Ctrl+Z, Ctrl+Shift+Z).
 
 ## Verification
 
@@ -23,7 +24,7 @@ The **Verification** tab runs these checks in the browser. CI runs the same chec
 
 | Check | Reference | Talus |
 |---|---|---|
-| Planar wedge (Culmann), static, seismic, surcharge + anchor | Closed form | exact (to 1e-9) |
+| Planar wedge (Culmann), static, seismic, surcharge + anchor, line load (V and H), piles, geogrid | Closed form | exact (to 1e-9) |
 | Undrained circle, F = su·L·R / (W·d) | Closed form | within 1e-4, all methods |
 | Submerged slope ≡ buoyant weight | Archimedes | exact by force equilibrium; rigorous methods within 0.2% |
 | Dry sand, F → tan φ / tan β | Infinite slope | within 3% (from above) |
