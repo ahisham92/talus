@@ -282,3 +282,45 @@ test("staged drawdown: free-draining soils give the conventional F; clays give a
   const strong = analyseCase(buildCases(pr({ preset: "claySilt", cR: 40, phiR: 22 })).cases.find((k) => k.key === "drawdown"), { method: "mp", slices: 40 });
   assert.ok(strong.F >= cl.F - 1e-3, `${strong.F} vs ${cl.F}`);
 });
+
+// ---- batch of 2026-11-24: revetment reinforcement, more loads, solving for an input
+
+import { solveFor, goalsFor } from "../talus_app/static/engine/analyse.js";
+import { buildCases } from "../talus_app/static/engine/project.js";
+
+test("a revetment takes a pile row and geogrids, and they only help", () => {
+  const plain = analyse(complete({ type: "revetment" }));
+  const piled = analyse(complete({ type: "revetment", piles: { on: true, x: 15, Vp: 600, spacing: 1 }, grids: { on: true } }));
+  for (const c of piled.cases) assert.ok(!c.error && Number.isFinite(c.F), c.name);
+  plain.cases.forEach((c, i) => assert.ok(piled.cases[i].F >= c.F - 1e-3, `${c.name}: ${piled.cases[i].F} < ${c.F}`));
+  assert.ok(piled.geometry.reinforcement.some((r) => r.kind === "grid") && piled.geometry.reinforcement.some((r) => r.kind === "pile"));
+});
+
+test("line loads and extra strips lower F; permanent loads stay whole in the earthquake case", () => {
+  const base = { type: "cut", load: { q: 0 } };
+  const a = analyse(complete(base));
+  const b = analyse(complete({ ...base, loads: [{ kind: "line", at: 1, V: 80, H: 20, permanent: true }, { kind: "strip", at: 4, width: 3, q: 30 }] }));
+  assert.ok(b.cases[0].F < a.cases[0].F, `${b.cases[0].F} vs ${a.cases[0].F}`);
+  const built = buildCases(complete({ ...base, loads: [{ kind: "line", at: 1, V: 80, permanent: true }, { kind: "line", at: 2, V: 50 }] }));
+  const eq = built.cases.find((c) => c.key === "seismic");
+  assert.deepEqual(eq.model.lines.map((l) => -l.fy), [80, 15]);
+  // the horizontal force points towards the face being checked
+  const emb = buildCases(complete({ type: "embankment", loads: [{ kind: "line", at: 4, V: 0, H: 10 }] }));
+  const land = emb.cases.find((c) => c.key === "long"), water = emb.cases.find((c) => c.key === "drawdown");
+  assert.ok(land.model.lines[0].fx > 0 && water.model.lines[0].fx < 0);
+});
+
+test("EC7: variable loads are not factored in the seismic design situation", () => {
+  const built = buildCases(complete({ type: "cut", design: { basis: "ec7" } }));
+  assert.equal(built.cases.find((c) => c.key === "long").model.factors.variable, 1.3);
+  assert.equal(built.cases.find((c) => c.key === "seismic").model.factors.variable, 1);
+});
+
+test("solving for an input lands on the target from the safe side", () => {
+  const p = complete({ type: "cut", nails: { on: true } });
+  assert.ok(goalsFor(p).some((g) => g.k === "nails.length"));
+  const r = solveFor(p, "load.q");
+  assert.ok(r.value > 0 && r.worst.pass && r.worst.ratio < 1.03, JSON.stringify(r));
+  const over = analyse({ ...p, load: { ...p.load, q: r.value + 3 } }, { fast: true });
+  assert.ok(!over.pass, "a little more load should fail");
+});
